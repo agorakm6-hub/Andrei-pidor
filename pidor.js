@@ -7,14 +7,23 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const PORT = process.env.PORT || 10000;
+const EXTERNAL_URL = process.env.RENDER_EXTERNAL_URL || process.env.WEBHOOK_URL;
+const WEBHOOK_PATH = `/bot${BOT_TOKEN}`;
+
+if (!EXTERNAL_URL) {
+    console.error('❌ Не найден RENDER_EXTERNAL_URL или WEBHOOK_URL.');
+    process.exit(1);
+}
+
 const app = express();
-const PORT = process.env.PORT || 3000;
+app.use(express.json());
 
 const sessions = {};
 const userStates = {};
 const reportData = {};
 const accounts = {};
-const activeReports = {};
 
 const ACCOUNTS_FILE = path.join(__dirname, 'accounts.json');
 if (fs.existsSync(ACCOUNTS_FILE)) {
@@ -48,12 +57,7 @@ const PERSONAL_DATA_SUBCATEGORIES = {
     'other_personal': 'Другие личные данные'
 };
 
-const bot = new Bot(process.env.BOT_TOKEN);
-
-async function isAdmin(ctx) {
-    const adminIds = process.env.ADMIN_IDS.split(',').map(id => id.trim());
-    return adminIds.includes(ctx.from?.id.toString());
-}
+const bot = new Bot(BOT_TOKEN);
 
 function saveAccounts() {
     fs.writeFileSync(ACCOUNTS_FILE, JSON.stringify(accounts, null, 2));
@@ -72,10 +76,6 @@ function createProgressBar(current, total, length = 15) {
 }
 
 bot.command('start', async (ctx) => {
-    if (!(await isAdmin(ctx))) {
-        return ctx.reply('⛔ Доступ запрещен');
-    }
-
     const keyboard = new InlineKeyboard()
         .text('📱 Добавить аккаунт', 'add_account')
         .text('📋 Мои аккаунты', 'list_accounts')
@@ -102,10 +102,6 @@ bot.command('start', async (ctx) => {
 });bot.on('callback_query', async (ctx) => {
     const action = ctx.callbackQuery.data;
     const userId = ctx.from.id;
-
-    if (!(await isAdmin(ctx))) {
-        return ctx.answerCallbackQuery('⛔ Доступ запрещен');
-    }
 
     switch (action) {
         case 'add_account':
@@ -272,11 +268,6 @@ bot.command('start', async (ctx) => {
 });bot.on('message:text', async (ctx) => {
     const userId = ctx.from.id;
     const text = ctx.message.text;
-
-    if (!(await isAdmin(ctx))) {
-        return ctx.reply('⛔ Доступ запрещен');
-    }
-
     const state = userStates[userId]?.state;
 
     if (!state) {
@@ -641,9 +632,7 @@ async function sendReports(userId, accountsToUse, target, totalReports, reason, 
                 `❌ Ошибок: ${result.failed}`,
                 { parse_mode: 'Markdown' }
             );
-        } catch (e) {
-            // Игнорируем ошибки обновления
-        }
+        } catch (e) {}
     };
 
     const sendPromises = accountTasks.map(async (task) => {
@@ -662,7 +651,6 @@ async function sendReports(userId, accountsToUse, target, totalReports, reason, 
             try {
                 entity = await client.getEntity(target);
             } catch (e) {
-                console.error(`Error getting entity for ${task.phone}:`, e);
                 result.failed += task.count;
                 if (statIndex >= 0) result.accountStats[statIndex].success = false;
                 return;
@@ -673,9 +661,7 @@ async function sendReports(userId, accountsToUse, target, totalReports, reason, 
                     await client.invoke(
                         new Api.account.ReportPeer({
                             peer: entity,
-                            reason: new Api.InputReportReasonOther({
-                                text: reason
-                            }),
+                            reason: new Api.InputReportReasonOther({ text: reason }),
                             message: reason
                         })
                     );
@@ -692,12 +678,10 @@ async function sendReports(userId, accountsToUse, target, totalReports, reason, 
                         await new Promise(resolve => setTimeout(resolve, 1000));
                     }
                 } catch (e) {
-                    console.error(`Report error for ${task.phone}:`, e);
                     result.failed++;
                     completedReports++;
                     
                     if (e.message.includes('FLOOD') || e.message.includes('flood')) {
-                        console.log(`Flood wait for ${task.phone}, skipping remaining...`);
                         result.skipped += (task.count - i - 1);
                         completedReports += (task.count - i - 1);
                         await updateProgress();
@@ -708,7 +692,6 @@ async function sendReports(userId, accountsToUse, target, totalReports, reason, 
 
             await client.disconnect();
         } catch (error) {
-            console.error(`Account ${task.phone} failed:`, error);
             result.failed += task.count;
             completedReports += task.count;
             if (statIndex >= 0) result.accountStats[statIndex].success = false;
@@ -717,21 +700,15 @@ async function sendReports(userId, accountsToUse, target, totalReports, reason, 
     });
 
     await Promise.all(sendPromises);
-
     result.time = Math.round((Date.now() - startTime) / 1000);
-    
     await updateProgress();
-
     return result;
 }
 
 bot.command('report', async (ctx) => {
-    if (!(await isAdmin(ctx))) {
-        return ctx.reply('⛔ Доступ запрещен');
-    }
-    
+    const userId = ctx.from.id;
     const activeAccs = Object.keys(accounts).filter(k => 
-        accounts[k].owner === ctx.from.id && accounts[k].active
+        accounts[k].owner === userId && accounts[k].active
     );
     
     if (activeAccs.length === 0) {
@@ -739,10 +716,7 @@ bot.command('report', async (ctx) => {
         return;
     }
     
-    userStates[ctx.from.id] = { 
-        state: 'waiting_bot_username',
-        isMassReport: false 
-    };
+    userStates[userId] = { state: 'waiting_bot_username', isMassReport: false };
     
     await ctx.reply(
         '🚀 *Быстрая жалоба*\n\n' +
@@ -754,12 +728,9 @@ bot.command('report', async (ctx) => {
 });
 
 bot.command('massreport', async (ctx) => {
-    if (!(await isAdmin(ctx))) {
-        return ctx.reply('⛔ Доступ запрещен');
-    }
-    
+    const userId = ctx.from.id;
     const activeAccs = Object.keys(accounts).filter(k => 
-        accounts[k].owner === ctx.from.id && accounts[k].active
+        accounts[k].owner === userId && accounts[k].active
     );
     
     if (activeAccs.length < 2) {
@@ -767,10 +738,7 @@ bot.command('massreport', async (ctx) => {
         return;
     }
     
-    userStates[ctx.from.id] = { 
-        state: 'waiting_bot_username',
-        isMassReport: true 
-    };
+    userStates[userId] = { state: 'waiting_bot_username', isMassReport: true };
     
     await ctx.reply(
         '🚀 *Массовая жалоба*\n\n' +
@@ -783,10 +751,6 @@ bot.command('massreport', async (ctx) => {
 });
 
 bot.command('accounts', async (ctx) => {
-    if (!(await isAdmin(ctx))) {
-        return ctx.reply('⛔ Доступ запрещен');
-    }
-    
     const userId = ctx.from.id;
     const userAccounts = Object.keys(accounts).filter(k => accounts[k].owner === userId);
     
@@ -799,77 +763,52 @@ bot.command('accounts', async (ctx) => {
     for (const phone of userAccounts) {
         const acc = accounts[phone];
         const status = acc.active ? '✅ Активен' : '❌ Заблокирован';
-        msg += `${status}\n`;
-        msg += `📱 \`${phone}\`\n`;
-        msg += `📅 Добавлен: ${new Date(acc.addedAt).toLocaleDateString()}\n`;
-        msg += `🆔 Владелец: ${acc.owner}\n\n`;
+        msg += `${status}\n📱 \`${phone}\`\n📅 Добавлен: ${new Date(acc.addedAt).toLocaleDateString()}\n\n`;
     }
     
     msg += `📊 Всего: ${userAccounts.length} | Активных: ${userAccounts.filter(k => accounts[k].active).length}`;
-    
     await ctx.reply(msg, { parse_mode: 'Markdown' });
 });
 
 bot.catch((err) => {
-    const ctx = err.ctx;
-    console.error(`Error while handling update ${ctx.update.update_id}:`);
-    const e = err.error;
-    
-    if (e instanceof GrammyError) {
-        console.error('Error in request:', e.description);
-    } else if (e instanceof HttpError) {
-        console.error('Could not contact Telegram:', e);
-    } else {
-        console.error('Unknown error:', e);
-    }
+    console.error('Bot error:', err);
 });
 
 app.get('/', (req, res) => {
-    res.json({
-        status: 'online',
-        accounts: Object.keys(accounts).length,
-        uptime: process.uptime(),
-        version: '2.0.0'
-    });
-});
-
-app.get('/status', (req, res) => {
-    const totalAccounts = Object.keys(accounts).length;
-    const activeAccounts = Object.keys(accounts).filter(k => accounts[k].active).length;
-    
-    res.json({
-        total_accounts: totalAccounts,
-        active_accounts: activeAccounts,
-        blocked_accounts: totalAccounts - activeAccounts,
-        users: [...new Set(Object.values(accounts).map(a => a.owner))].length
-    });
+    res.json({ status: 'online', version: '2.0.0' });
 });
 
 async function startBot() {
     try {
-        await bot.start();
-        console.log('✅ Bot started successfully!');
-        console.log(`📱 Loaded accounts: ${Object.keys(accounts).length}`);
+        await bot.api.setWebhook(`${EXTERNAL_URL}${WEBHOOK_PATH}`);
+        console.log(`✅ Webhook установлен: ${EXTERNAL_URL}${WEBHOOK_PATH}`);
     } catch (error) {
-        console.error('❌ Bot start error:', error);
+        console.error('❌ Ошибка установки вебхука:', error);
+        process.exit(1);
     }
 }
 
-app.listen(PORT, () => {
-    console.log(`🌐 Server running on port ${PORT}`);
-    console.log('🚀 Bot v2.0 - Multi-account reporting system');
+app.post(WEBHOOK_PATH, async (req, res) => {
+    try {
+        await bot.handleUpdate(req.body);
+        res.sendStatus(200);
+    } catch (error) {
+        console.error('Ошибка обработки обновления:', error);
+        res.sendStatus(500);
+    }
 });
 
-startBot();
+app.listen(PORT, () => {
+    console.log(`🌐 Сервер запущен на порту ${PORT}`);
+    startBot();
+});
 
 process.on('SIGTERM', () => {
-    console.log('📥 SIGTERM received. Saving accounts...');
     saveAccounts();
     process.exit(0);
 });
 
 process.on('SIGINT', () => {
-    console.log('📥 SIGINT received. Saving accounts...');
     saveAccounts();
     process.exit(0);
 });
