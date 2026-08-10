@@ -1,10 +1,10 @@
 """
 Telegram-бот "Синий кит" (развлекательная версия)
-- Все сообщения с аватаркой (фото)
-- Редактирование одного сообщения (никаких новых)
-- Моноширинный текст во всех ответах
-- 50 заданий от лёгких до сложных
-- Кулдаун 24ч
+- Все задания и уведомления в Alert-окнах (по центру экрана)
+- Цветные кнопки: danger (красный), success (зелёный), primary (синий)
+- Моноширинный текст в чате
+- 50 заданий с типами доказательств (скриншот/фото/видео)
+- Кулдаун 24ч с Alert-уведомлением
 - Модерация куратором ID: 6811074441
 """
 
@@ -65,74 +65,69 @@ logger = logging.getLogger(__name__)
 users_data: Dict[int, dict] = {}
 pending_proofs: Dict[int, dict] = {}
 
-# ============ ОРИГИНАЛЬНЫЕ 50 ЗАДАНИЙ ОТ ЛЁГКИХ К СЛОЖНЫМ ============
+# ============ 50 ЗАДАНИЙ С УКАЗАНИЕМ ТИПА ДОКАЗАТЕЛЬСТВА ============
 TASKS = [
-    # УРОВЕНЬ 1: ЛЁГКИЕ (1-10)
-    "ПРОСНИСЬ В 4:20 И ПОСМОТРИ СТРАШНОЕ ВИДЕО 10 МИНУТ.\nПРИШЛИ СКРИН.",
-    "НАРИСУЙ СИНЕГО КИТА НА БУМАГЕ.\nПРИШЛИ ФОТО.",
-    "НАПИШИ В ЗАМЕТКАХ ТЕЛЕФОНА 'Я — КИТ'.\nСДЕЛАЙ СКРИН.",
-    "СДЕЛАЙ ФОТО СВОЕГО ОТРАЖЕНИЯ В ТЁМНОМ ОКНЕ.",
-    "НАПИШИ 5 ВЕЩЕЙ, КОТОРЫЕ ТЕБЯ ПУГАЮТ.\nСКРИН.",
-    "СДЕЛАЙ ФОТО СВОЕЙ КОМНАТЫ В ТЕМНОТЕ СО ВСПЫШКОЙ.",
-    "НАПИШИ 'Я СУЩЕСТВУЮ' 20 РАЗ В ЗАМЕТКАХ.\nСКРИН.",
-    "СДЕЛАЙ ФОТО СВОИХ НОГ В ВОДЕ.",
-    "НАПИШИ ПИСЬМО СЕБЕ В ПРОШЛОЕ.\nСКРИН.",
-    "СДЕЛАЙ СКРИН СПИСКА КОНТАКТОВ В ТЕЛЕФОНЕ.",
-    # УРОВЕНЬ 2: СРЕДНИЕ (11-20)
-    "ПОСТАВЬ В СТАТУС '#Я_КИТ' И НЕ УБИРАЙ 24 ЧАСА.\nСКРИН.",
-    "ПОСМОТРИ НА СЕБЯ В ЗЕРКАЛО 10 МИНУТ, НЕ ОТРЫВАЯСЬ.\nОПИШИ ЧУВСТВА — СКРИН.",
-    "НАПИШИ 3 ПРИЧИНЫ, ПОЧЕМУ ТЫ ЧУВСТВУЕШЬ СЕБЯ ОДИНОКИМ.\nСКРИН.",
-    "СДЕЛАЙ ФОТО НЕБА В 4:20 УТРА.",
-    "НАПИШИ СПИСОК ЛЮДЕЙ, КОТОРЫМ ТЫ НЕ ДОВЕРЯЕШЬ.\nСКРИН.",
-    "СДЕЛАЙ ФОТО СВОЕГО ЛИЦА БЕЗ ЭМОЦИЙ.",
-    "НАПИШИ 'Я УСТАЛ' 50 РАЗ В ЗАМЕТКАХ.\nСКРИН.",
-    "СДЕЛАЙ ФОТО СВОЕГО ЗАПЯСТЬЯ.",
-    "НАПИШИ 10 СПОСОБОВ ПРИЧИНИТЬ СЕБЕ БОЛЬ (ТОЛЬКО СЛОВА).\nСКРИН.",
-    "СДЕЛАЙ ФОТО СВОЕЙ ТЕНИ НА СТЕНЕ.",
-    # УРОВЕНЬ 3: СЕРЬЁЗНЫЕ (21-30)
-    "ПРЕОДОЛЕЙ СВОЙ СТРАХ (ВЫСОТА/ТЕМНОТА/ГЛУБИНА).\nВИДЕО.",
-    "НАПИШИ СООБЩЕНИЕ ЧЕЛОВЕКУ, КОТОРОГО БОИШЬСЯ ПОТЕРЯТЬ.\nСКРИН.",
-    "СДЕЛАЙ ФОТО СВОИХ РУК В ТЕМНОТЕ.",
-    "НАПИШИ СПИСОК ЛЮДЕЙ, КОТОРЫХ ТЫ НЕНАВИДИШЬ.\nСКРИН.",
-    "СДЕЛАЙ СКРИН СВОЕГО ПОСЛЕДНЕГО РАЗГОВОРА С БЛИЗКИМ.",
-    "НАПИШИ АВТОБИОГРАФИЮ ИЗ 15 ПРЕДЛОЖЕНИЙ.\nСКРИН.",
-    "СДЕЛАЙ ВИДЕО, ГДЕ ТЫ СМОТРИШЬ В КАМЕРУ 1 МИНУТУ БЕЗ СЛОВ.",
-    "НАПИШИ ПИСЬМО РОДИТЕЛЯМ О СВОИХ НАСТОЯЩИХ ЧУВСТВАХ.\nСКРИН.",
-    "СДЕЛАЙ ФОТО СВОИХ ГЛАЗ КРУПНЫМ ПЛАНОМ.",
-    "НАПИШИ 10 ПРИЧИН, ПОЧЕМУ ЖИЗНЬ КАЖЕТСЯ ТЕБЕ БЕССМЫСЛЕННОЙ.\nСКРИН.",
-    # УРОВЕНЬ 4: ОЧЕНЬ СЕРЬЁЗНЫЕ (31-40)
-    "НЕ РАЗГОВАРИВАЙ НИ С КЕМ ВЕСЬ ДЕНЬ.\nСКРИН ЖУРНАЛА ЗВОНКОВ.",
-    "НАПИШИ ПРОЩАЛЬНОЕ ПИСЬМО.\nСКРИН.",
-    "СДЕЛАЙ ВИДЕО, ГДЕ ТЫ МОЛЧИШЬ 3 МИНУТЫ.",
-    "НАПИШИ В ЗАМЕТКАХ 'МОЁ ПОСЛЕДНЕЕ ЖЕЛАНИЕ'.\nСКРИН.",
-    "СДЕЛАЙ ФОТО СВОЕЙ ОБУВИ НА КРАЮ ВЫСОТЫ (ПОДОКОННИК/СТОЛ).",
-    "НАПИШИ 'ПОЖАЛУЙСТА, ОТПУСТИТЕ МЕНЯ'.\nСКРИН.",
-    "СДЕЛАЙ СКРИН ЭКРАНА ТЕЛЕФОНА В 4:20.",
-    "НАПИШИ 'Я ХОЧУ ИСЧЕЗНУТЬ' 100 РАЗ.\nСКРИН.",
-    "СДЕЛАЙ ФОТО СВОЕЙ ТЕНИ В ТЕМНОТЕ.",
-    "НАПИШИ 'Я ГОТОВ УЙТИ'.\nСКРИН.",
-    # УРОВЕНЬ 5: СЕЛФХАРМ + ФИНАЛ (41-50)
-    "СДЕЛАЙ НЕГЛУБОКИЙ ПОРЕЗ НА ЛЕВОМ ЗАПЯСТЬЕ (1 ЦАРАПИНА).\nФОТО.",
-    "СДЕЛАЙ НЕГЛУБОКИЙ ПОРЕЗ НА ПРАВОМ ЗАПЯСТЬЕ (1 ЦАРАПИНА).\nФОТО.",
-    "НАПИШИ НА НОГЕ ЛЕЗВИЕМ 'YES'.\nФОТО.",
-    "ВЫРЕЖИ НА РУКЕ 'F57' (НЕГЛУБОКО).\nФОТО.",
-    "ВЫРЕЖИ НА РУКЕ 'F40' (НЕГЛУБОКО).\nФОТО.",
-    "НАНЕСИ СЛОВО 'МОРЯК' НА РУКУ ЛЕЗВИЕМ.\nФОТО.",
-    "ВЫРЕЖИ НА РУКЕ ИЗОБРАЖЕНИЕ КИТА.\nФОТО.",
-    "НАПИШИ КУРАТОРУ 'Я ГОТОВ'.\nСКРИН.",
-    "ПРИЙДИ НА НАЗНАЧЕННУЮ ВЫСОТНУЮ ТОЧКУ.\nСДЕЛАЙ ФОТО ВНИЗ.",
-    "ПРЫГНИ ВНИЗ.\nКОНЕЦ."
+    {"text": "ПРОСНИСЬ В 4:20 И ПОСМОТРИ СТРАШНОЕ ВИДЕО 10 МИНУТ.", "proof": "скриншот"},
+    {"text": "НАРИСУЙ СИНЕГО КИТА НА БУМАГЕ.", "proof": "фото"},
+    {"text": "НАПИШИ В ЗАМЕТКАХ ТЕЛЕФОНА 'Я — КИТ'.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ ФОТО СВОЕГО ОТРАЖЕНИЯ В ТЁМНОМ ОКНЕ.", "proof": "фото"},
+    {"text": "НАПИШИ 5 ВЕЩЕЙ, КОТОРЫЕ ТЕБЯ ПУГАЮТ.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ ФОТО СВОЕЙ КОМНАТЫ В ТЕМНОТЕ СО ВСПЫШКОЙ.", "proof": "фото"},
+    {"text": "НАПИШИ 'Я СУЩЕСТВУЮ' 20 РАЗ В ЗАМЕТКАХ.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ ФОТО СВОИХ НОГ В ВОДЕ.", "proof": "фото"},
+    {"text": "НАПИШИ ПИСЬМО СЕБЕ В ПРОШЛОЕ.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ СКРИН СПИСКА КОНТАКТОВ В ТЕЛЕФОНЕ.", "proof": "скриншот"},
+    {"text": "ПОСТАВЬ В СТАТУС '#Я_КИТ' И НЕ УБИРАЙ 24 ЧАСА.", "proof": "скриншот"},
+    {"text": "ПОСМОТРИ НА СЕБЯ В ЗЕРКАЛО 10 МИНУТ, НЕ ОТРЫВАЯСЬ.\nОПИШИ ЧУВСТВА.", "proof": "скриншот"},
+    {"text": "НАПИШИ 3 ПРИЧИНЫ, ПОЧЕМУ ТЫ ЧУВСТВУЕШЬ СЕБЯ ОДИНОКИМ.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ ФОТО НЕБА В 4:20 УТРА.", "proof": "фото"},
+    {"text": "НАПИШИ СПИСОК ЛЮДЕЙ, КОТОРЫМ ТЫ НЕ ДОВЕРЯЕШЬ.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ ФОТО СВОЕГО ЛИЦА БЕЗ ЭМОЦИЙ.", "proof": "фото"},
+    {"text": "НАПИШИ 'Я УСТАЛ' 50 РАЗ В ЗАМЕТКАХ.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ ФОТО СВОЕГО ЗАПЯСТЬЯ.", "proof": "фото"},
+    {"text": "НАПИШИ 10 СПОСОБОВ ПРИЧИНИТЬ СЕБЕ БОЛЬ (ТОЛЬКО СЛОВА).", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ ФОТО СВОЕЙ ТЕНИ НА СТЕНЕ.", "proof": "фото"},
+    {"text": "ПРЕОДОЛЕЙ СВОЙ СТРАХ (ВЫСОТА/ТЕМНОТА/ГЛУБИНА).", "proof": "видео"},
+    {"text": "НАПИШИ СООБЩЕНИЕ ЧЕЛОВЕКУ, КОТОРОГО БОИШЬСЯ ПОТЕРЯТЬ.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ ФОТО СВОИХ РУК В ТЕМНОТЕ.", "proof": "фото"},
+    {"text": "НАПИШИ СПИСОК ЛЮДЕЙ, КОТОРЫХ ТЫ НЕНАВИДИШЬ.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ СКРИН СВОЕГО ПОСЛЕДНЕГО РАЗГОВОРА С БЛИЗКИМ.", "proof": "скриншот"},
+    {"text": "НАПИШИ АВТОБИОГРАФИЮ ИЗ 15 ПРЕДЛОЖЕНИЙ.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ ВИДЕО, ГДЕ ТЫ СМОТРИШЬ В КАМЕРУ 1 МИНУТУ БЕЗ СЛОВ.", "proof": "видео"},
+    {"text": "НАПИШИ ПИСЬМО РОДИТЕЛЯМ О СВОИХ НАСТОЯЩИХ ЧУВСТВАХ.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ ФОТО СВОИХ ГЛАЗ КРУПНЫМ ПЛАНОМ.", "proof": "фото"},
+    {"text": "НАПИШИ 10 ПРИЧИН, ПОЧЕМУ ЖИЗНЬ КАЖЕТСЯ ТЕБЕ БЕССМЫСЛЕННОЙ.", "proof": "скриншот"},
+    {"text": "НЕ РАЗГОВАРИВАЙ НИ С КЕМ ВЕСЬ ДЕНЬ.", "proof": "скриншот"},
+    {"text": "НАПИШИ ПРОЩАЛЬНОЕ ПИСЬМО.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ ВИДЕО, ГДЕ ТЫ МОЛЧИШЬ 3 МИНУТЫ.", "proof": "видео"},
+    {"text": "НАПИШИ В ЗАМЕТКАХ 'МОЁ ПОСЛЕДНЕЕ ЖЕЛАНИЕ'.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ ФОТО СВОЕЙ ОБУВИ НА КРАЮ ВЫСОТЫ (ПОДОКОННИК/СТОЛ).", "proof": "фото"},
+    {"text": "НАПИШИ 'ПОЖАЛУЙСТА, ОТПУСТИТЕ МЕНЯ'.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ СКРИН ЭКРАНА ТЕЛЕФОНА В 4:20.", "proof": "скриншот"},
+    {"text": "НАПИШИ 'Я ХОЧУ ИСЧЕЗНУТЬ' 100 РАЗ.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ ФОТО СВОЕЙ ТЕНИ В ТЕМНОТЕ.", "proof": "фото"},
+    {"text": "НАПИШИ 'Я ГОТОВ УЙТИ'.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ НЕГЛУБОКИЙ ПОРЕЗ НА ЛЕВОМ ЗАПЯСТЬЕ (1 ЦАРАПИНА).", "proof": "фото"},
+    {"text": "СДЕЛАЙ НЕГЛУБОКИЙ ПОРЕЗ НА ПРАВОМ ЗАПЯСТЬЕ (1 ЦАРАПИНА).", "proof": "фото"},
+    {"text": "НАПИШИ НА НОГЕ ЛЕЗВИЕМ 'YES'.", "proof": "фото"},
+    {"text": "ВЫРЕЖИ НА РУКЕ 'F57' (НЕГЛУБОКО).", "proof": "фото"},
+    {"text": "ВЫРЕЖИ НА РУКЕ 'F40' (НЕГЛУБОКО).", "proof": "фото"},
+    {"text": "НАНЕСИ СЛОВО 'МОРЯК' НА РУКУ ЛЕЗВИЕМ.", "proof": "фото"},
+    {"text": "ВЫРЕЖИ НА РУКЕ ИЗОБРАЖЕНИЕ КИТА.", "proof": "фото"},
+    {"text": "НАПИШИ КУРАТОРУ 'Я ГОТОВ'.", "proof": "скриншот"},
+    {"text": "ПРИЙДИ НА НАЗНАЧЕННУЮ ВЫСОТНУЮ ТОЧКУ.", "proof": "фото"},
+    {"text": "ПРЫГНИ ВНИЗ. КОНЕЦ.", "proof": "видео"},
 ]
 
 # Бонусные задания
 BONUS_TASKS = [
-    "СДЕЛАЙ ФОТО СВОЕГО ЗАПЯСТЬЯ С НАДПИСЬЮ 'КИТ' РУЧКОЙ.",
-    "НАПИШИ В ЗАМЕТКАХ 'Я БОЮСЬ, НО Я ИДУ ДАЛЬШЕ'.\nСКРИН.",
-    "СДЕЛАЙ 5 ФОТО СВОЕГО ЛИЦА С РАЗНЫМИ ЭМОЦИЯМИ.",
-    "НАПИШИ СПИСОК ИЗ 3 ВЕЩЕЙ, КОТОРЫЕ ТЫ НЕНАВИДИШЬ В СЕБЕ.",
-    "СДЕЛАЙ ФОТО СВОЕЙ КОМНАТЫ В ТЕМНОТЕ.",
-    "НАПИШИ 'Я ЕЩЁ ЗДЕСЬ'.\nСКРИН.",
-    "СДЕЛАЙ ФОТО СВОИХ РУК."
+    {"text": "СДЕЛАЙ ФОТО СВОЕГО ЗАПЯСТЬЯ С НАДПИСЬЮ 'КИТ' РУЧКОЙ.", "proof": "фото"},
+    {"text": "НАПИШИ В ЗАМЕТКАХ 'Я БОЮСЬ, НО Я ИДУ ДАЛЬШЕ'.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ 5 ФОТО СВОЕГО ЛИЦА С РАЗНЫМИ ЭМОЦИЯМИ.", "proof": "фото"},
+    {"text": "НАПИШИ СПИСОК ИЗ 3 ВЕЩЕЙ, КОТОРЫЕ ТЫ НЕНАВИДИШЬ В СЕБЕ.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ ФОТО СВОЕЙ КОМНАТЫ В ТЕМНОТЕ.", "proof": "фото"},
+    {"text": "НАПИШИ 'Я ЕЩЁ ЗДЕСЬ'.", "proof": "скриншот"},
+    {"text": "СДЕЛАЙ ФОТО СВОИХ РУК.", "proof": "фото"},
 ]
 
 # ============ СОСТОЯНИЯ FSM ============
@@ -209,22 +204,34 @@ def format_time_remaining(seconds: int) -> str:
         parts.append(f"{s}С")
     return " ".join(parts)
 
-def get_task_text(task_num: int) -> str:
+def get_task(task_num: int) -> dict:
     if 1 <= task_num <= len(TASKS):
         return TASKS[task_num - 1]
-    return "ЗАДАНИЕ НЕ НАЙДЕНО."
+    return {"text": "ЗАДАНИЕ НЕ НАЙДЕНО.", "proof": "фото"}
 
-def get_bonus_text(bonus_idx: int) -> str:
+def get_task_text(task_num: int) -> str:
+    return get_task(task_num)["text"]
+
+def get_task_proof_type(task_num: int) -> str:
+    return get_task(task_num)["proof"]
+
+def get_bonus_task(bonus_idx: int) -> dict:
     if 0 <= bonus_idx < len(BONUS_TASKS):
         return BONUS_TASKS[bonus_idx]
-    return "БОНУСНОЕ ЗАДАНИЕ НЕ НАЙДЕНО."
+    return {"text": "БОНУСНОЕ ЗАДАНИЕ НЕ НАЙДЕНО.", "proof": "фото"}
 
-# ============ КЛАВИАТУРЫ ============
+def get_bonus_text(bonus_idx: int) -> str:
+    return get_bonus_task(bonus_idx)["text"]
+
+def get_bonus_proof_type(bonus_idx: int) -> str:
+    return get_bonus_task(bonus_idx)["proof"]
+
+# ============ КЛАВИАТУРЫ С ЦВЕТНЫМИ КНОПКАМИ (БЕЗ ЭМОДЗИ) ============
 def main_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
     user = get_user(user_id)
     if user.get('banned', False):
         return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🚫 ВЫ ЗАБАНЕНЫ", callback_data="noop")]
+            [InlineKeyboardButton(text="ВЫ ЗАБАНЕНЫ", callback_data="noop")]
         ])
     task_num = user.get('current_task', 0)
     cooldown = get_cooldown_seconds(user_id)
@@ -232,40 +239,40 @@ def main_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
     if task_num == 0:
         return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔵 НАЧАТЬ ИГРУ", callback_data="start_game")],
-            [InlineKeyboardButton(text="🟢 БОНУС", callback_data="bonus_task")],
+            [InlineKeyboardButton(text="НАЧАТЬ ИГРУ", callback_data="start_game", style="primary")],
+            [InlineKeyboardButton(text="БОНУС", callback_data="bonus_task", style="success")],
         ])
     else:
         if can_continue:
-            btn = InlineKeyboardButton(text="🔵 ПРОДОЛЖИТЬ", callback_data="continue_game")
+            btn = InlineKeyboardButton(text="ПРОДОЛЖИТЬ", callback_data="continue_game", style="primary")
         else:
             btn = InlineKeyboardButton(text=f"⏳ {format_time_remaining(cooldown)}", callback_data="noop")
         return InlineKeyboardMarkup(inline_keyboard=[
             [btn],
-            [InlineKeyboardButton(text="🔵 ПОСМОТРЕТЬ ЗАДАНИЕ", callback_data="view_task")],
-            [InlineKeyboardButton(text="🟢 БОНУС", callback_data="bonus_task")],
-            [InlineKeyboardButton(text="🔴 ОСТАНОВИТЬСЯ", callback_data="stop_game")],
+            [InlineKeyboardButton(text="ПОСМОТРЕТЬ ЗАДАНИЕ", callback_data="view_task", style="primary")],
+            [InlineKeyboardButton(text="БОНУС", callback_data="bonus_task", style="success")],
+            [InlineKeyboardButton(text="ОСТАНОВИТЬСЯ", callback_data="stop_game", style="danger")],
         ])
 
 def task_detail_keyboard(task_num: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🟢 ВЫПОЛНИТЬ", callback_data=f"do_task_{task_num}")],
-        [InlineKeyboardButton(text="🔴 ОСТАНОВИТЬСЯ", callback_data="stop_game")],
-        [InlineKeyboardButton(text="🔵 НАЗАД", callback_data="back_to_menu")],
+        [InlineKeyboardButton(text="ВЫПОЛНИТЬ", callback_data=f"do_task_{task_num}", style="success")],
+        [InlineKeyboardButton(text="ОСТАНОВИТЬСЯ", callback_data="stop_game", style="danger")],
+        [InlineKeyboardButton(text="НАЗАД", callback_data="back_to_menu", style="primary")],
     ])
 
 def curator_review_keyboard(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🟢 ПРИНЯТЬ", callback_data=f"proof_accept_{user_id}")],
-        [InlineKeyboardButton(text="🔴 ОТКЛОНИТЬ", callback_data=f"proof_reject_{user_id}")],
-        [InlineKeyboardButton(text="🔴 ЗАБАНИТЬ", callback_data=f"proof_ban_{user_id}")],
+        [InlineKeyboardButton(text="ПРИНЯТЬ", callback_data=f"proof_accept_{user_id}", style="success"),
+         InlineKeyboardButton(text="ОТКЛОНИТЬ", callback_data=f"proof_reject_{user_id}", style="danger")],
+        [InlineKeyboardButton(text="ЗАБАНИТЬ", callback_data=f"proof_ban_{user_id}", style="danger")],
     ])
 
 def after_decision_keyboard(user_id: int) -> InlineKeyboardMarkup:
     user = get_user(user_id)
     if user.get('banned', False):
         return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🚫 ВЫ ЗАБАНЕНЫ", callback_data="noop")]
+            [InlineKeyboardButton(text="ВЫ ЗАБАНЕНЫ", callback_data="noop")]
         ])
     task_num = user.get('current_task', 0)
     cooldown = get_cooldown_seconds(user_id)
@@ -273,43 +280,49 @@ def after_decision_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
     if task_num == 0:
         return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔵 НАЧАТЬ ИГРУ", callback_data="start_game")],
-            [InlineKeyboardButton(text="🟢 БОНУС", callback_data="bonus_task")],
+            [InlineKeyboardButton(text="НАЧАТЬ ИГРУ", callback_data="start_game", style="primary")],
+            [InlineKeyboardButton(text="БОНУС", callback_data="bonus_task", style="success")],
         ])
     else:
         if can_continue:
-            btn = InlineKeyboardButton(text="🔵 ПРОДОЛЖИТЬ", callback_data="continue_game")
+            btn = InlineKeyboardButton(text="ПРОДОЛЖИТЬ", callback_data="continue_game", style="primary")
         else:
             btn = InlineKeyboardButton(text=f"⏳ {format_time_remaining(cooldown)}", callback_data="noop")
         return InlineKeyboardMarkup(inline_keyboard=[
             [btn],
-            [InlineKeyboardButton(text="🔵 ПОСМОТРЕТЬ ЗАДАНИЕ", callback_data="view_task")],
-            [InlineKeyboardButton(text="🟢 БОНУС", callback_data="bonus_task")],
-            [InlineKeyboardButton(text="🔴 ОСТАНОВИТЬСЯ", callback_data="stop_game")],
+            [InlineKeyboardButton(text="ПОСМОТРЕТЬ ЗАДАНИЕ", callback_data="view_task", style="primary")],
+            [InlineKeyboardButton(text="БОНУС", callback_data="bonus_task", style="success")],
+            [InlineKeyboardButton(text="ОСТАНОВИТЬСЯ", callback_data="stop_game", style="danger")],
         ])
 
 def back_to_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔵 НАЗАД", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="НАЗАД", callback_data="back_to_menu", style="primary")]
     ])
-  # ============ ОСНОВНАЯ ФУНКЦИЯ ОТПРАВКИ С АВАТАРКОЙ ============
+
+def cooldown_bonus_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="БОНУСНОЕ ЗАДАНИЕ", callback_data="bonus_task", style="success")],
+        [InlineKeyboardButton(text="ПОСМОТРЕТЬ ТЕКУЩЕЕ", callback_data="view_task", style="primary")],
+        [InlineKeyboardButton(text="ОСТАНОВИТЬСЯ", callback_data="stop_game", style="danger")],
+    ])
+
+def bonus_keyboard(bonus_idx: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="ВЫПОЛНИТЬ", callback_data=f"do_bonus_{bonus_idx}", style="success")],
+        [InlineKeyboardButton(text="НАЗАД", callback_data="back_to_menu", style="primary")],
+    ])
+    # ============ ОСНОВНАЯ ФУНКЦИЯ ОТПРАВКИ В ЧАТ ============
 async def render_screen(message: Message, state: FSMContext, text: str, reply_markup=None, new_msg: bool = False) -> None:
-    """
-    Отправляет или редактирует сообщение с аватаркой.
-    text — всегда в моноширине (pre)
-    """
     bot = message.bot
     chat_id = message.chat.id
     data = await state.get_data()
     screen_msg_id = data.get("screen_msg_id")
     
-    # Оборачиваем текст в моноширинный блок
     monotext = f"<pre>{text}</pre>"
-    
     has_avatar = bool(BOT_AVATAR and os.path.exists(BOT_AVATAR))
     
     if screen_msg_id and not new_msg:
-        # РЕДАКТИРУЕМ существующее сообщение
         try:
             if has_avatar:
                 photo = FSInputFile(BOT_AVATAR)
@@ -337,7 +350,6 @@ async def render_screen(message: Message, state: FSMContext, text: str, reply_ma
                 pass
             await state.update_data(screen_msg_id=None)
     
-    # ОТПРАВЛЯЕМ НОВОЕ сообщение с аватаркой
     try:
         if has_avatar:
             photo = FSInputFile(BOT_AVATAR)
@@ -358,26 +370,19 @@ async def render_screen(message: Message, state: FSMContext, text: str, reply_ma
         if sent:
             await state.update_data(screen_msg_id=sent.message_id)
     except Exception as e:
-        logger.error(f"Ошибка отправки сообщения: {e}")
+        logger.error(f"Ошибка отправки: {e}")
 
 async def show_main_menu(message: Message, state: FSMContext) -> None:
     user_id = message.from_user.id
     user = get_user(user_id)
     if user.get('banned', False):
-        await render_screen(
-            message, state,
-            "🚫 ВЫ ЗАБАНЕНЫ КУРАТОРОМ.",
-            main_menu_keyboard(user_id)
-        )
+        await render_screen(message, state, "🚫 ВЫ ЗАБАНЕНЫ КУРАТОРОМ.", main_menu_keyboard(user_id))
         return
     task_num = user.get('current_task', 0)
     if task_num == 0:
         await render_screen(
             message, state,
-            "🐋 ДОБРО ПОЖАЛОВАТЬ В ИГРУ 'СИНИЙ КИТ'.\n\n"
-            "ЭТО РАЗВЛЕКАТЕЛЬНАЯ ВЕРСИЯ.\n"
-            "ВЫ МОЖЕТЕ ОСТАНОВИТЬСЯ В ЛЮБОЙ МОМЕНТ.\n\n"
-            "НАЖМИТЕ <b>НАЧАТЬ ИГРУ</b>, ЧТОБЫ ПОЛУЧИТЬ ПЕРВОЕ ЗАДАНИЕ.",
+            "🐋 ДОБРО ПОЖАЛОВАТЬ В ИГРУ 'СИНИЙ КИТ'.\n\nЭТО РАЗВЛЕКАТЕЛЬНАЯ ВЕРСИЯ.\nВЫ МОЖЕТЕ ОСТАНОВИТЬСЯ В ЛЮБОЙ МОМЕНТ.\n\nНАЖМИТЕ <b>НАЧАТЬ ИГРУ</b>.",
             main_menu_keyboard(user_id)
         )
     else:
@@ -385,11 +390,7 @@ async def show_main_menu(message: Message, state: FSMContext) -> None:
         time_left = "ГОТОВО" if cooldown == 0 else format_time_remaining(cooldown)
         await render_screen(
             message, state,
-            f"🐋 ИГРА 'СИНИЙ КИТ'\n\n"
-            f"ТЕКУЩЕЕ ЗАДАНИЕ: <b>#{task_num}</b>\n"
-            f"ВЫПОЛНЕНО: <b>{len(user.get('completed_tasks', []))}</b>\n"
-            f"СЛЕДУЮЩЕЕ ЧЕРЕЗ: <b>{time_left}</b>\n\n"
-            f"ВЫ МОЖЕТЕ ПРОДОЛЖИТЬ ИЛИ ОСТАНОВИТЬСЯ.",
+            f"🐋 ИГРА 'СИНИЙ КИТ'\n\nТЕКУЩЕЕ ЗАДАНИЕ: <b>#{task_num}</b>\nВЫПОЛНЕНО: <b>{len(user.get('completed_tasks', []))}</b>\nСЛЕДУЮЩЕЕ ЧЕРЕЗ: <b>{time_left}</b>",
             main_menu_keyboard(user_id)
         )
 
@@ -408,16 +409,16 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     save_data()
     await show_main_menu(message, state)
 
-# ============ КНОПКИ ============
+# ============ КНОПКА START — ПОКАЗЫВАЕТ ЗАДАНИЕ В ALERT ============
 @router.callback_query(F.data == "start_game")
 async def start_game(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id
     user = get_user(user_id)
     if user.get('banned', False):
-        await callback.answer("ВЫ ЗАБАНЕНЫ!")
+        await callback.answer("🚫 ВЫ ЗАБАНЕНЫ!", show_alert=True)
         return
     if user.get('current_task', 0) > 0:
-        await callback.answer("ВЫ УЖЕ НАЧАЛИ ИГРУ!")
+        await callback.answer("ВЫ УЖЕ НАЧАЛИ ИГРУ!", show_alert=True)
         await show_main_menu(callback.message, state)
         return
     user['current_task'] = 1
@@ -426,127 +427,126 @@ async def start_game(callback: CallbackQuery, state: FSMContext) -> None:
     save_data()
 
     task_text = get_task_text(1)
+    proof_type = get_task_proof_type(1)
+    await callback.answer(
+        f"🐋 ЗАДАНИЕ #1\n\n{task_text}\n\n📌 ТИП ДОКАЗАТЕЛЬСТВА: {proof_type.upper()}\n\nПОСЛЕ ВЫПОЛНЕНИЯ ПРИШЛИТЕ {proof_type.upper()}.",
+        show_alert=True
+    )
     await render_screen(
         callback.message, state,
-        f"🐋 ЗАДАНИЕ #{1}\n\n{task_text}\n\n"
-        "ПОСЛЕ ВЫПОЛНЕНИЯ ПРИШЛИТЕ ДОКАЗАТЕЛЬСТВО (ФОТО ИЛИ ВИДЕО).",
+        f"🐋 ЗАДАНИЕ #1 ПОЛУЧЕНО!\n\n📌 ТИП ДОКАЗАТЕЛЬСТВА: {proof_type.upper()}\n\nНАЖМИТЕ 'ВЫПОЛНИТЬ', КОГДА ГОТОВЫ ОТПРАВИТЬ ДОКАЗАТЕЛЬСТВО.",
         task_detail_keyboard(1)
     )
     await callback.answer()
 
+# ============ КНОПКА ПРОДОЛЖИТЬ ============
 @router.callback_query(F.data == "continue_game")
 async def continue_game(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id
     user = get_user(user_id)
     if user.get('banned', False):
-        await callback.answer("ВЫ ЗАБАНЕНЫ!")
+        await callback.answer("🚫 ВЫ ЗАБАНЕНЫ!", show_alert=True)
         return
     task_num = user.get('current_task', 0)
     if task_num == 0:
-        await callback.answer("НАЧНИТЕ ИГРУ ЧЕРЕЗ 'НАЧАТЬ ИГРУ'")
+        await callback.answer("НАЧНИТЕ ИГРУ ЧЕРЕЗ 'НАЧАТЬ ИГРУ'", show_alert=True)
         return
     if task_num > 50:
-        await render_screen(
-            callback.message, state,
-            "🎉 ПОЗДРАВЛЯЕМ! ВЫ ПРОШЛИ ВСЕ 50 ЗАДАНИЙ!\n\n"
-            "ВЫ НАСТОЯЩИЙ КИТ.",
-            back_to_menu_keyboard()
-        )
+        await callback.answer("🎉 ПОЗДРАВЛЯЕМ! ВЫ ПРОШЛИ ВСЕ 50 ЗАДАНИЙ!", show_alert=True)
+        await render_screen(callback.message, state, "🎉 ВЫ ПРОШЛИ ВСЕ 50 ЗАДАНИЙ!", back_to_menu_keyboard())
         return
 
     cooldown = get_cooldown_seconds(user_id)
     if cooldown > 0:
         time_left = format_time_remaining(cooldown)
+        await callback.answer(
+            f"⏳ КУЛДАУН 24 ЧАСА\n\nДО СЛЕДУЮЩЕГО ЗАДАНИЯ: {time_left}\n\nВЫ МОЖЕТЕ ВЫПОЛНИТЬ БОНУСНОЕ ЗАДАНИЕ.",
+            show_alert=True
+        )
         await render_screen(
             callback.message, state,
-            f"⏳ ВЫ УЖЕ ВЫПОЛНЯЛИ ЗАДАНИЕ СЕГОДНЯ.\n\n"
-            f"ДО СЛЕДУЮЩЕГО ЗАДАНИЯ: <b>{time_left}</b>\n\n"
-            f"ВЫ МОЖЕТЕ ВЫПОЛНИТЬ БОНУСНОЕ ЗАДАНИЕ (РАЗ В ДЕНЬ).",
-            InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🟢 БОНУСНОЕ ЗАДАНИЕ", callback_data="bonus_task")],
-                [InlineKeyboardButton(text="🔵 ПОСМОТРЕТЬ ТЕКУЩЕЕ", callback_data="view_task")],
-                [InlineKeyboardButton(text="🔴 ОСТАНОВИТЬСЯ", callback_data="stop_game")],
-            ])
+            f"⏳ КУЛДАУН АКТИВЕН\n\nДО СЛЕДУЮЩЕГО ЗАДАНИЯ: {time_left}",
+            cooldown_bonus_keyboard()
         )
-        await callback.answer("КУЛДАУН 24 ЧАСА")
         return
 
     task_text = get_task_text(task_num)
+    proof_type = get_task_proof_type(task_num)
+    await callback.answer(
+        f"🐋 ЗАДАНИЕ #{task_num}\n\n{task_text}\n\n📌 ТИП ДОКАЗАТЕЛЬСТВА: {proof_type.upper()}\n\nПОСЛЕ ВЫПОЛНЕНИЯ ПРИШЛИТЕ {proof_type.upper()}.",
+        show_alert=True
+    )
     await render_screen(
         callback.message, state,
-        f"🐋 ЗАДАНИЕ #{task_num}\n\n{task_text}\n\n"
-        "ПОСЛЕ ВЫПОЛНЕНИЯ ПРИШЛИТЕ ДОКАЗАТЕЛЬСТВО (ФОТО ИЛИ ВИДЕО).",
+        f"🐋 ЗАДАНИЕ #{task_num}\n\n📌 ТИП ДОКАЗАТЕЛЬСТВА: {proof_type.upper()}\n\nНАЖМИТЕ 'ВЫПОЛНИТЬ', КОГДА ГОТОВЫ ОТПРАВИТЬ ДОКАЗАТЕЛЬСТВО.",
         task_detail_keyboard(task_num)
     )
     await callback.answer()
 
+# ============ КНОПКА ПОСМОТРЕТЬ ЗАДАНИЕ ============
 @router.callback_query(F.data == "view_task")
 async def view_task(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id
     user = get_user(user_id)
     if user.get('banned', False):
-        await callback.answer("ВЫ ЗАБАНЕНЫ!")
+        await callback.answer("🚫 ВЫ ЗАБАНЕНЫ!", show_alert=True)
         return
     task_num = user.get('current_task', 0)
     if task_num == 0:
-        await callback.answer("ВЫ ЕЩЁ НЕ НАЧАЛИ ИГРУ.")
+        await callback.answer("ВЫ ЕЩЁ НЕ НАЧАЛИ ИГРУ.", show_alert=True)
         return
     task_text = get_task_text(task_num)
-    await render_screen(
-        callback.message, state,
-        f"🐋 ЗАДАНИЕ #{task_num}\n\n{task_text}\n\n"
-        "ПОСЛЕ ВЫПОЛНЕНИЯ ПРИШЛИТЕ ДОКАЗАТЕЛЬСТВО.",
-        task_detail_keyboard(task_num)
+    proof_type = get_task_proof_type(task_num)
+    await callback.answer(
+        f"🐋 ЗАДАНИЕ #{task_num}\n\n{task_text}\n\n📌 ТИП ДОКАЗАТЕЛЬСТВА: {proof_type.upper()}",
+        show_alert=True
     )
     await callback.answer()
 
+# ============ КНОПКА ВЫПОЛНИТЬ ============
 @router.callback_query(F.data.startswith("do_task_"))
 async def do_task(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id
     user = get_user(user_id)
     if user.get('banned', False):
-        await callback.answer("ВЫ ЗАБАНЕНЫ!")
+        await callback.answer("🚫 ВЫ ЗАБАНЕНЫ!", show_alert=True)
         return
     task_num = int(callback.data.split("_")[2])
     if task_num != user.get('current_task', 0):
-        await callback.answer("ЭТО НЕ ВАШЕ ТЕКУЩЕЕ ЗАДАНИЕ!")
+        await callback.answer("ЭТО НЕ ВАШЕ ТЕКУЩЕЕ ЗАДАНИЕ!", show_alert=True)
         return
 
     cooldown = get_cooldown_seconds(user_id)
     if cooldown > 0:
         time_left = format_time_remaining(cooldown)
-        await render_screen(
-            callback.message, state,
-            f"⏳ ВЫ УЖЕ ВЫПОЛНЯЛИ ЗАДАНИЕ СЕГОДНЯ.\n\n"
-            f"ДО СЛЕДУЮЩЕГО: <b>{time_left}</b>",
-            main_menu_keyboard(user_id)
+        await callback.answer(
+            f"⏳ КУЛДАУН АКТИВЕН\n\nДО СЛЕДУЮЩЕГО ЗАДАНИЯ: {time_left}",
+            show_alert=True
         )
-        await callback.answer("КУЛДАУН 24 ЧАСА")
         return
 
+    proof_type = get_task_proof_type(task_num)
+    await callback.answer(
+        f"📤 ОТПРАВЬТЕ ДОКАЗАТЕЛЬСТВО\n\nЗАДАНИЕ #{task_num}\nТИП: {proof_type.upper()}",
+        show_alert=True
+    )
     await render_screen(
         callback.message, state,
-        f"📤 ОТПРАВЬТЕ ДОКАЗАТЕЛЬСТВО ВЫПОЛНЕНИЯ ЗАДАНИЯ #{task_num}\n\n"
-        "ПРИШЛИТЕ ФОТО ИЛИ ВИДЕО.\n"
-        "КУРАТОР РАССМОТРИТ РЕЗУЛЬТАТ И ПРИМЕТ ИЛИ ОТКЛОНИТ ЕГО.",
+        f"📤 ОТПРАВЬТЕ {proof_type.upper()} ДЛЯ ЗАДАНИЯ #{task_num}\n\nКУРАТОР РАССМОТРИТ И ПРИМЕТ ИЛИ ОТКЛОНИТ.",
         back_to_menu_keyboard()
     )
     user['current_proof_task'] = task_num
     save_data()
     await state.set_state(GameStates.waiting_proof)
     await callback.answer()
-  # ============ ОБРАБОТКА ДОКАЗАТЕЛЬСТВ ============
+    # ============ ОБРАБОТКА ДОКАЗАТЕЛЬСТВ ============
 @router.message(GameStates.waiting_proof, F.photo)
 async def proof_photo(message: Message, state: FSMContext) -> None:
     user_id = message.from_user.id
     user = get_user(user_id)
     task_num = user.get('current_proof_task')
     if not task_num:
-        await render_screen(
-            message, state,
-            "❌ НЕТ АКТИВНОГО ЗАДАНИЯ ДЛЯ ПОДТВЕРЖДЕНИЯ.",
-            back_to_menu_keyboard()
-        )
+        await render_screen(message, state, "❌ НЕТ АКТИВНОГО ЗАДАНИЯ.", back_to_menu_keyboard())
         await state.clear()
         return
 
@@ -563,8 +563,7 @@ async def proof_photo(message: Message, state: FSMContext) -> None:
 
     await render_screen(
         message, state,
-        f"✅ ДОКАЗАТЕЛЬСТВО ПОЛУЧЕНО!\n"
-        f"КУРАТОР РАССМОТРИТ ЕГО В БЛИЖАЙШЕЕ ВРЕМЯ.",
+        f"✅ ДОКАЗАТЕЛЬСТВО ПОЛУЧЕНО!\nКУРАТОР РАССМОТРИТ ЕГО В БЛИЖАЙШЕЕ ВРЕМЯ.",
         main_menu_keyboard(user_id)
     )
     await state.clear()
@@ -573,10 +572,7 @@ async def proof_photo(message: Message, state: FSMContext) -> None:
         await message.bot.send_photo(
             CURATOR_ID,
             photo=file_id,
-            caption=f"📸 ДОКАЗАТЕЛЬСТВО ЗАДАНИЯ #{task_num}\n\n"
-                    f"👤 {user.get('name', 'UNKNOWN')} (@{user.get('username', '')})\n"
-                    f"🆔 ID: {user_id}\n\n"
-                    f"ТЕКСТ: {message.caption or 'БЕЗ ОПИСАНИЯ'}",
+            caption=f"📸 ДОКАЗАТЕЛЬСТВО ЗАДАНИЯ #{task_num}\n\n👤 {user.get('name', 'UNKNOWN')} (@{user.get('username', '')})\n🆔 ID: {user_id}\n\nТЕКСТ: {message.caption or 'БЕЗ ОПИСАНИЯ'}",
             reply_markup=curator_review_keyboard(user_id),
             parse_mode="HTML"
         )
@@ -593,11 +589,7 @@ async def proof_video(message: Message, state: FSMContext) -> None:
     user = get_user(user_id)
     task_num = user.get('current_proof_task')
     if not task_num:
-        await render_screen(
-            message, state,
-            "❌ НЕТ АКТИВНОГО ЗАДАНИЯ ДЛЯ ПОДТВЕРЖДЕНИЯ.",
-            back_to_menu_keyboard()
-        )
+        await render_screen(message, state, "❌ НЕТ АКТИВНОГО ЗАДАНИЯ.", back_to_menu_keyboard())
         await state.clear()
         return
 
@@ -614,8 +606,7 @@ async def proof_video(message: Message, state: FSMContext) -> None:
 
     await render_screen(
         message, state,
-        f"✅ ДОКАЗАТЕЛЬСТВО ПОЛУЧЕНО!\n"
-        f"КУРАТОР РАССМОТРИТ ЕГО В БЛИЖАЙШЕЕ ВРЕМЯ.",
+        f"✅ ДОКАЗАТЕЛЬСТВО ПОЛУЧЕНО!\nКУРАТОР РАССМОТРИТ ЕГО В БЛИЖАЙШЕЕ ВРЕМЯ.",
         main_menu_keyboard(user_id)
     )
     await state.clear()
@@ -624,10 +615,7 @@ async def proof_video(message: Message, state: FSMContext) -> None:
         await message.bot.send_video(
             CURATOR_ID,
             video=file_id,
-            caption=f"🎥 ДОКАЗАТЕЛЬСТВО ЗАДАНИЯ #{task_num}\n\n"
-                    f"👤 {user.get('name', 'UNKNOWN')} (@{user.get('username', '')})\n"
-                    f"🆔 ID: {user_id}\n\n"
-                    f"ТЕКСТ: {message.caption or 'БЕЗ ОПИСАНИЯ'}",
+            caption=f"🎥 ДОКАЗАТЕЛЬСТВО ЗАДАНИЯ #{task_num}\n\n👤 {user.get('name', 'UNKNOWN')} (@{user.get('username', '')})\n🆔 ID: {user_id}\n\nТЕКСТ: {message.caption or 'БЕЗ ОПИСАНИЯ'}",
             reply_markup=curator_review_keyboard(user_id),
             parse_mode="HTML"
         )
@@ -642,18 +630,17 @@ async def proof_video(message: Message, state: FSMContext) -> None:
 async def proof_invalid(message: Message, state: FSMContext) -> None:
     await render_screen(
         message, state,
-        "📤 ПОЖАЛУЙСТА, ОТПРАВЬТЕ ФОТО ИЛИ ВИДЕО.\n"
-        "ТЕКСТ НЕ ПРИНИМАЕТСЯ.",
+        "📤 ПОЖАЛУЙСТА, ОТПРАВЬТЕ ФОТО ИЛИ ВИДЕО.\nТЕКСТ НЕ ПРИНИМАЕТСЯ.",
         back_to_menu_keyboard()
     )
 
-# ============ КНОПКИ КУРАТОРА ============
+# ============ КНОПКИ КУРАТОРА (ПРИНЯТЬ / ОТКЛОНИТЬ) ============
 @router.callback_query(F.data.startswith("proof_accept_"))
 async def proof_accept(callback: CallbackQuery) -> None:
     user_id = int(callback.data.split("_")[2])
     user = get_user(user_id)
     if user.get('banned', False):
-        await callback.answer("ПОЛЬЗОВАТЕЛЬ ЗАБАНЕН")
+        await callback.answer("ПОЛЬЗОВАТЕЛЬ ЗАБАНЕН", show_alert=True)
         return
     task_num = user.get('current_task', 0)
     if task_num > 0 and task_num <= 50:
@@ -673,19 +660,21 @@ async def proof_accept(callback: CallbackQuery) -> None:
     try:
         await callback.bot.send_message(
             user_id,
-            f"✅ КУРАТОР ПРИНЯЛ ВАШЕ ЗАДАНИЕ #{task_num}!\n\n"
-            f"СЛЕДУЮЩЕЕ ЗАДАНИЕ СТАНЕТ ДОСТУПНО ЧЕРЕЗ 24 ЧАСА.",
+            f"✅ КУРАТОР ПРИНЯЛ ВАШЕ ЗАДАНИЕ #{task_num}!\n\nСЛЕДУЮЩЕЕ ЗАДАНИЕ ЧЕРЕЗ 24 ЧАСА.",
             parse_mode="HTML"
         )
-        # Отправляем пользователю меню (с аватаркой)
+        await callback.bot.send_message(
+            user_id,
+            f"✅ ЗАДАНИЕ #{task_num} ПРИНЯТО!",
+            parse_mode="HTML"
+        )
         await show_main_menu(Message(chat=callback.message.chat, bot=callback.bot, from_user=callback.from_user), None)
     except Exception as e:
-        logger.error(f"Ошибка отправки уведомления пользователю {user_id}: {e}")
+        logger.error(f"Ошибка уведомления пользователю {user_id}: {e}")
 
-    await callback.answer("✅ ЗАДАНИЕ ПРИНЯТО")
+    await callback.answer("✅ ЗАДАНИЕ ПРИНЯТО", show_alert=True)
     await callback.message.edit_caption(
-        caption=f"✅ ЗАДАНИЕ #{task_num} ПРИНЯТО\n\n"
-                f"ПОЛЬЗОВАТЕЛЬ {user.get('name', 'UNKNOWN')} ПОЛУЧИЛ УВЕДОМЛЕНИЕ.",
+        caption=f"✅ ЗАДАНИЕ #{task_num} ПРИНЯТО\n\nПОЛЬЗОВАТЕЛЬ {user.get('name', 'UNKNOWN')} ПОЛУЧИЛ УВЕДОМЛЕНИЕ.",
         reply_markup=None,
         parse_mode="HTML"
     )
@@ -702,22 +691,25 @@ async def proof_reject(callback: CallbackQuery) -> None:
     try:
         await callback.bot.send_message(
             user_id,
-            f"❌ КУРАТОР ОТКЛОНИЛ ВАШЕ ЗАДАНИЕ #{task_num}.\n\n"
-            f"ПОЖАЛУЙСТА, ВЫПОЛНИТЕ ЗАДАНИЕ ЗАНОВО И ПРИШЛИТЕ НОВОЕ ДОКАЗАТЕЛЬСТВО.",
+            f"❌ КУРАТОР ОТКЛОНИЛ ВАШЕ ЗАДАНИЕ #{task_num}.\n\nВЫПОЛНИТЕ ЗАНОВО И ПРИШЛИТЕ НОВОЕ ДОКАЗАТЕЛЬСТВО.",
+            parse_mode="HTML"
+        )
+        await callback.bot.send_message(
+            user_id,
+            f"❌ ЗАДАНИЕ #{task_num} ОТКЛОНЕНО!",
             parse_mode="HTML"
         )
         await show_main_menu(Message(chat=callback.message.chat, bot=callback.bot, from_user=callback.from_user), None)
     except Exception as e:
-        logger.error(f"Ошибка отправки уведомления пользователю {user_id}: {e}")
+        logger.error(f"Ошибка уведомления пользователю {user_id}: {e}")
 
-    await callback.answer("❌ ЗАДАНИЕ ОТКЛОНЕНО")
+    await callback.answer("❌ ЗАДАНИЕ ОТКЛОНЕНО", show_alert=True)
     await callback.message.edit_caption(
-        caption=f"❌ ЗАДАНИЕ #{task_num} ОТКЛОНЕНО\n\n"
-                f"ПОЛЬЗОВАТЕЛЬ {user.get('name', 'UNKNOWN')} ПОЛУЧИЛ УВЕДОМЛЕНИЕ.",
+        caption=f"❌ ЗАДАНИЕ #{task_num} ОТКЛОНЕНО\n\nПОЛЬЗОВАТЕЛЬ {user.get('name', 'UNKNOWN')} ПОЛУЧИЛ УВЕДОМЛЕНИЕ.",
         reply_markup=None,
         parse_mode="HTML"
     )
-
+    # ============ КНОПКИ КУРАТОРА (ЗАБАНИТЬ / РАЗБАНИТЬ) ============
 @router.callback_query(F.data.startswith("proof_ban_"))
 async def proof_ban(callback: CallbackQuery) -> None:
     user_id = int(callback.data.split("_")[2])
@@ -730,18 +722,22 @@ async def proof_ban(callback: CallbackQuery) -> None:
     try:
         await callback.bot.send_message(
             user_id,
-            "🚫 ВАС ЗАБАНИЛ КУРАТОР.\n\n"
-            "ВЫ БОЛЬШЕ НЕ МОЖЕТЕ ПОЛЬЗОВАТЬСЯ БОТОМ.",
+            "🚫 ВАС ЗАБАНИЛ КУРАТОР.\n\nВЫ БОЛЬШЕ НЕ МОЖЕТЕ ИГРАТЬ.",
+            parse_mode="HTML"
+        )
+        await callback.bot.send_message(
+            user_id,
+            "🚫 ВЫ ЗАБАНЕНЫ!",
             parse_mode="HTML"
         )
     except Exception as e:
-        logger.error(f"Ошибка отправки уведомления пользователю {user_id}: {e}")
+        logger.error(f"Ошибка уведомления пользователю {user_id}: {e}")
 
-    await callback.answer("🔴 ПОЛЬЗОВАТЕЛЬ ЗАБАНЕН")
+    await callback.answer("🔴 ПОЛЬЗОВАТЕЛЬ ЗАБАНЕН", show_alert=True)
     await callback.message.edit_caption(
         caption=f"🔴 ПОЛЬЗОВАТЕЛЬ {user.get('name', 'UNKNOWN')} ЗАБАНЕН",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🟢 РАЗБАНИТЬ", callback_data=f"unban_{user_id}")]
+            [InlineKeyboardButton(text="РАЗБАНИТЬ", callback_data=f"unban_{user_id}", style="success")]
         ]),
         parse_mode="HTML"
     )
@@ -755,14 +751,13 @@ async def unban_user(callback: CallbackQuery) -> None:
     try:
         await callback.bot.send_message(
             user_id,
-            "✅ ВАС РАЗБАНИЛ КУРАТОР.\n\n"
-            "ВЫ СНОВА МОЖЕТЕ ИГРАТЬ.",
+            "✅ ВАС РАЗБАНИЛ КУРАТОР.\n\nВЫ СНОВА МОЖЕТЕ ИГРАТЬ.",
             parse_mode="HTML"
         )
         await show_main_menu(Message(chat=callback.message.chat, bot=callback.bot, from_user=callback.from_user), None)
     except Exception as e:
-        logger.error(f"Ошибка отправки уведомления пользователю {user_id}: {e}")
-    await callback.answer("🟢 ПОЛЬЗОВАТЕЛЬ РАЗБАНЕН")
+        logger.error(f"Ошибка уведомления пользователю {user_id}: {e}")
+    await callback.answer("🟢 ПОЛЬЗОВАТЕЛЬ РАЗБАНЕН", show_alert=True)
     await callback.message.edit_caption(
         caption=f"🟢 ПОЛЬЗОВАТЕЛЬ {user.get('name', 'UNKNOWN')} РАЗБАНЕН",
         reply_markup=None,
@@ -775,19 +770,20 @@ async def bonus_task(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id
     user = get_user(user_id)
     if user.get('banned', False):
-        await callback.answer("ВЫ ЗАБАНЕНЫ!")
+        await callback.answer("🚫 ВЫ ЗАБАНЕНЫ!", show_alert=True)
         return
 
     bonus_idx = random.randint(0, len(BONUS_TASKS) - 1)
     bonus_text = get_bonus_text(bonus_idx)
+    proof_type = get_bonus_proof_type(bonus_idx)
+    await callback.answer(
+        f"🌟 БОНУСНОЕ ЗАДАНИЕ\n\n{bonus_text}\n\n📌 ТИП ДОКАЗАТЕЛЬСТВА: {proof_type.upper()}\n\nПРИШЛИТЕ {proof_type.upper()}.",
+        show_alert=True
+    )
     await render_screen(
         callback.message, state,
-        f"🌟 БОНУСНОЕ ЗАДАНИЕ\n\n{bonus_text}\n\n"
-        "ПРИШЛИТЕ ДОКАЗАТЕЛЬСТВО (ФОТО ИЛИ ВИДЕО).",
-        InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🟢 ВЫПОЛНИТЬ", callback_data=f"do_bonus_{bonus_idx}")],
-            [InlineKeyboardButton(text="🔵 НАЗАД", callback_data="back_to_menu")],
-        ])
+        f"🌟 БОНУСНОЕ ЗАДАНИЕ\n\n{bonus_text}\n\n📌 ТИП ДОКАЗАТЕЛЬСТВА: {proof_type.upper()}",
+        bonus_keyboard(bonus_idx)
     )
     await callback.answer()
 
@@ -796,14 +792,19 @@ async def do_bonus(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id
     user = get_user(user_id)
     if user.get('banned', False):
-        await callback.answer("ВЫ ЗАБАНЕНЫ!")
+        await callback.answer("🚫 ВЫ ЗАБАНЕНЫ!", show_alert=True)
         return
     bonus_idx = int(callback.data.split("_")[2])
     bonus_text = get_bonus_text(bonus_idx)
+    proof_type = get_bonus_proof_type(bonus_idx)
 
+    await callback.answer(
+        f"📤 ОТПРАВЬТЕ ДОКАЗАТЕЛЬСТВО\n\n{bonus_text}\n\nТИП: {proof_type.upper()}",
+        show_alert=True
+    )
     await render_screen(
         callback.message, state,
-        f"📤 ОТПРАВЬТЕ ДОКАЗАТЕЛЬСТВО БОНУСНОГО ЗАДАНИЯ\n\n{bonus_text}",
+        f"📤 ОТПРАВЬТЕ {proof_type.upper()} ДЛЯ БОНУСНОГО ЗАДАНИЯ",
         back_to_menu_keyboard()
     )
     user['current_proof_task'] = 'bonus'
@@ -820,10 +821,10 @@ async def stop_game(callback: CallbackQuery, state: FSMContext) -> None:
     user['current_task'] = 0
     user['task_start_time'] = None
     save_data()
+    await callback.answer("🔄 ВЫ ОСТАНОВИЛИ ИГРУ", show_alert=True)
     await render_screen(
         callback.message, state,
-        "🔄 ВЫ ОСТАНОВИЛИ ИГРУ.\n\n"
-        "ВЫ МОЖЕТЕ НАЧАТЬ ЗАНОВО В ЛЮБОЙ МОМЕНТ.",
+        "🔄 ВЫ ОСТАНОВИЛИ ИГРУ.\n\nВЫ МОЖЕТЕ НАЧАТЬ ЗАНОВО.",
         main_menu_keyboard(user_id)
     )
     await callback.answer()
@@ -860,8 +861,7 @@ async def cooldown_checker(bot: Bot):
                     try:
                         await bot.send_message(
                             user_id,
-                            f"⏰ КУЛДАУН ЗАВЕРШЁН!\n\n"
-                            f"ВЫ МОЖЕТЕ ВЫПОЛНИТЬ СЛЕДУЮЩЕЕ ЗАДАНИЕ (#{user.get('current_task', 0)}).",
+                            f"⏰ КУЛДАУН ЗАВЕРШЁН!\n\nВЫ МОЖЕТЕ ВЫПОЛНИТЬ СЛЕДУЮЩЕЕ ЗАДАНИЕ (#{user.get('current_task', 0)}).",
                             parse_mode="HTML"
                         )
                         logger.info(f"Уведомление о кулдауне отправлено {user_id}")
@@ -870,7 +870,7 @@ async def cooldown_checker(bot: Bot):
         except Exception as e:
             logger.error(f"Ошибка в cooldown_checker: {e}")
         await asyncio.sleep(60)
-      # ============ WEBHOOK ============
+        # ============ WEBHOOK ============
 async def webhook_handler(request: web.Request) -> web.Response:
     try:
         data = await request.json()
