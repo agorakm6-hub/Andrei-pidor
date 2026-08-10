@@ -127,6 +127,7 @@ class GameStates(StatesGroup):
     waiting_proof = State()
 
 router = Router()
+
 def load_data():
     global users_data, pending_proofs
     if os.path.exists(DATA_FILE):
@@ -212,7 +213,8 @@ def get_bonus_text(bonus_idx: int) -> str:
 
 def get_bonus_proof_type(bonus_idx: int) -> str:
     return get_bonus_task(bonus_idx)["proof"]
-  # ============ REPLY-КЛАВИАТУРА (ПОД ПОЛЕМ ВВОДА) ============
+
+# ============ REPLY-КЛАВИАТУРА (ПОД ПОЛЕМ ВВОДА) ============
 def get_reply_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     user = get_user(user_id)
     if user.get('banned', False):
@@ -241,51 +243,51 @@ def main_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
 
     if task_num == 0:
         return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="НАЧАТЬ ИГРУ", callback_data="start_game")],
+            [InlineKeyboardButton(text="НАЧАТЬ ИГРУ", callback_data="start_game", style="primary")],
         ])
     else:
-        buttons = []
         if can_continue:
-            buttons.append([InlineKeyboardButton(text="НОВОЕ ЗАДАНИЕ", callback_data="continue_game")])
+            btn = InlineKeyboardButton(text="НОВОЕ ЗАДАНИЕ", callback_data="continue_game", style="primary")
         else:
-            buttons.append([InlineKeyboardButton(text=f"⏳ {format_time_remaining(cooldown)}", callback_data="noop")])
-        buttons.append([InlineKeyboardButton(text="ПОСМОТРЕТЬ ЗАДАНИЕ", callback_data="view_task")])
-        buttons.append([InlineKeyboardButton(text="БОНУСНОЕ ЗАДАНИЕ", callback_data="bonus_task")])
-        buttons.append([InlineKeyboardButton(text="ОСТАНОВИТЬСЯ", callback_data="stop_game")])
-        return InlineKeyboardMarkup(inline_keyboard=buttons)
+            btn = InlineKeyboardButton(text=f"⏳ {format_time_remaining(cooldown)}", callback_data="noop")
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [btn],
+            [InlineKeyboardButton(text="ПОСМОТРЕТЬ ЗАДАНИЕ", callback_data="view_task", style="primary")],
+            [InlineKeyboardButton(text="БОНУСНОЕ ЗАДАНИЕ", callback_data="bonus_task", style="success")],
+            [InlineKeyboardButton(text="ОСТАНОВИТЬСЯ", callback_data="stop_game", style="danger")],
+        ])
 
 def task_detail_keyboard(task_num: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="ВЫПОЛНИТЬ", callback_data=f"do_task_{task_num}")],
-        [InlineKeyboardButton(text="ОСТАНОВИТЬСЯ", callback_data="stop_game")],
+        [InlineKeyboardButton(text="ВЫПОЛНИТЬ", callback_data=f"do_task_{task_num}", style="success")],
+        [InlineKeyboardButton(text="ОСТАНОВИТЬСЯ", callback_data="stop_game", style="danger")],
     ])
 
 def curator_review_keyboard(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="ПРИНЯТЬ", callback_data=f"proof_accept_{user_id}"),
-         InlineKeyboardButton(text="ОТКЛОНИТЬ", callback_data=f"proof_reject_{user_id}")],
-        [InlineKeyboardButton(text="ЗАБАНИТЬ", callback_data=f"proof_ban_{user_id}")],
+        [InlineKeyboardButton(text="ПРИНЯТЬ", callback_data=f"proof_accept_{user_id}", style="success"),
+         InlineKeyboardButton(text="ОТКЛОНИТЬ", callback_data=f"proof_reject_{user_id}", style="danger")],
+        [InlineKeyboardButton(text="ЗАБАНИТЬ", callback_data=f"proof_ban_{user_id}", style="danger")],
     ])
 
 def back_to_menu_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="НАЗАД", callback_data="back_to_menu")]
+        [InlineKeyboardButton(text="НАЗАД", callback_data="back_to_menu", style="primary")]
     ])
 
 def cooldown_bonus_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="БОНУСНОЕ ЗАДАНИЕ", callback_data="bonus_task")],
-        [InlineKeyboardButton(text="ПОСМОТРЕТЬ ЗАДАНИЕ", callback_data="view_task")],
-        [InlineKeyboardButton(text="ОСТАНОВИТЬСЯ", callback_data="stop_game")],
+        [InlineKeyboardButton(text="БОНУСНОЕ ЗАДАНИЕ", callback_data="bonus_task", style="success")],
+        [InlineKeyboardButton(text="ПОСМОТРЕТЬ ЗАДАНИЕ", callback_data="view_task", style="primary")],
+        [InlineKeyboardButton(text="ОСТАНОВИТЬСЯ", callback_data="stop_game", style="danger")],
     ])
 
 def bonus_keyboard(bonus_idx: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="ВЫПОЛНИТЬ", callback_data=f"do_bonus_{bonus_idx}")],
-        [InlineKeyboardButton(text="ОСТАНОВИТЬСЯ", callback_data="stop_game")],
+        [InlineKeyboardButton(text="ВЫПОЛНИТЬ", callback_data=f"do_bonus_{bonus_idx}", style="success")],
+        [InlineKeyboardButton(text="ОСТАНОВИТЬСЯ", callback_data="stop_game", style="danger")],
     ])
-
-# ============ ОСНОВНАЯ ФУНКЦИЯ ОТПРАВКИ В ЧАТ ============
+    # ============ ОСНОВНАЯ ФУНКЦИЯ ОТПРАВКИ В ЧАТ ============
 async def render_screen(message: Message, state: FSMContext, text: str, inline_markup=None) -> None:
     bot = message.bot
     chat_id = message.chat.id
@@ -366,8 +368,9 @@ async def show_main_menu(message: Message, state: FSMContext) -> None:
             message, state,
             f"🐋 ИГРА 'СИНИЙ КИТ'\n\nТЕКУЩЕЕ ЗАДАНИЕ: <b>#{task_num}</b>\nВЫПОЛНЕНО: <b>{len(user.get('completed_tasks', []))}</b>\nОСТАЛОСЬ: <b>{50 - len(user.get('completed_tasks', []))}</b>\nСЛЕДУЮЩЕЕ ЧЕРЕЗ: <b>{time_left}</b>",
             main_menu_keyboard(user_id)
-  )
-      # ============ /START ============
+        )
+
+# ============ /START ============
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
     user_id = message.from_user.id
@@ -456,7 +459,7 @@ async def continue_game(callback: CallbackQuery, state: FSMContext) -> None:
     )
     await callback.answer()
 
-# ============ ПОСМОТРЕТЬ ЗАДАНИЕ (ТОЛЬКО ALERT) ============
+# ============ ПОСМОТРЕТЬ ЗАДАНИЕ (ТОЛЬКО ALERT) — ПОКАЗЫВАЕТ ТЕКУЩЕЕ ============
 @router.callback_query(F.data == "view_task")
 async def view_task(callback: CallbackQuery, state: FSMContext) -> None:
     user_id = callback.from_user.id
@@ -474,6 +477,7 @@ async def view_task(callback: CallbackQuery, state: FSMContext) -> None:
         f"🐋 ТЕКУЩЕЕ ЗАДАНИЕ #{task_num}\n\n{task_text}\n\n📌 ТИП ДОКАЗАТЕЛЬСТВА: {proof_type.upper()}",
         show_alert=True
     )
+    await callback.answer()
 
 # ============ ВЫПОЛНИТЬ ============
 @router.callback_query(F.data.startswith("do_task_"))
@@ -511,7 +515,7 @@ async def do_task(callback: CallbackQuery, state: FSMContext) -> None:
     save_data()
     await state.set_state(GameStates.waiting_proof)
     await callback.answer()
-  # ============ ОБРАБОТКА ДОКАЗАТЕЛЬСТВ ============
+    # ============ ОБРАБОТКА ДОКАЗАТЕЛЬСТВ ============
 @router.message(GameStates.waiting_proof, F.photo)
 async def proof_photo(message: Message, state: FSMContext) -> None:
     user_id = message.from_user.id
@@ -625,8 +629,7 @@ async def proof_invalid(message: Message, state: FSMContext) -> None:
         "📤 ПОЖАЛУЙСТА, ОТПРАВЬТЕ ФОТО ИЛИ ВИДЕО.\nТЕКСТ НЕ ПРИНИМАЕТСЯ.",
         back_to_menu_keyboard()
     )
-
-# ============ КНОПКИ КУРАТОРА ============
+    # ============ КНОПКИ КУРАТОРА ============
 @router.callback_query(F.data.startswith("proof_accept_"))
 async def proof_accept(callback: CallbackQuery) -> None:
     user_id = int(callback.data.split("_")[2])
@@ -714,7 +717,7 @@ async def proof_ban(callback: CallbackQuery) -> None:
     await callback.message.edit_caption(
         caption=f"🔴 ПОЛЬЗОВАТЕЛЬ {user.get('name', 'UNKNOWN')} ЗАБАНЕН",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="РАЗБАНИТЬ", callback_data=f"unban_{user_id}")]
+            [InlineKeyboardButton(text="РАЗБАНИТЬ", callback_data=f"unban_{user_id}", style="success")]
         ]),
         parse_mode="HTML"
     )
@@ -819,14 +822,14 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext) -> None:
 async def noop(callback: CallbackQuery) -> None:
     await callback.answer()
 
-# ============ ОБРАБОТЧИК КНОПКИ "МОЙ ПУТЬ" (REPLY) — ТОЛЬКО ALERT ============
+# ============ ОБРАБОТЧИК КНОПКИ "МОЙ ПУТЬ" (REPLY) — ALERT ============
 @router.message(F.text == "🐋 МОЙ ПУТЬ")
 async def reply_my_path(message: Message) -> None:
     user_id = message.from_user.id
     user = get_user(user_id)
     
     if user.get('banned', False):
-        await message.answer("🚫 ВЫ ЗАБАНЕНЫ!", show_alert=True)
+        await message.answer("🚫 ВЫ ЗАБАНЕНЫ!", reply_markup=get_reply_keyboard(user_id))
         return
     
     task_num = user.get('current_task', 0)
@@ -836,7 +839,7 @@ async def reply_my_path(message: Message) -> None:
     if task_num == 0:
         await message.answer(
             f"🐋 ВЫ ЕЩЁ НЕ НАЧАЛИ ИГРУ.\n\nВЫПОЛНЕНО: 0\nОСТАЛОСЬ: 50",
-            show_alert=True
+            reply_markup=get_reply_keyboard(user_id)
         )
         return
     
@@ -847,17 +850,17 @@ async def reply_my_path(message: Message) -> None:
         f"ВЫПОЛНЕНО: {completed} из 50\n"
         f"ОСТАЛОСЬ: {remaining}\n\n"
         f"ПРОГРЕСС: {progress_bar}",
-        show_alert=True
+        reply_markup=get_reply_keyboard(user_id)
     )
 
-# ============ ОБРАБОТЧИК КНОПКИ "ДОПОЛНИТЕЛЬНО" (REPLY) — ТОЛЬКО ALERT ============
+# ============ ОБРАБОТЧИК КНОПКИ "ДОПОЛНИТЕЛЬНО" (REPLY) — ALERT ============
 @router.message(F.text == "ℹ️ ДОПОЛНИТЕЛЬНО")
 async def reply_additional(message: Message) -> None:
     user_id = message.from_user.id
     user = get_user(user_id)
     
     if user.get('banned', False):
-        await message.answer("🚫 ВЫ ЗАБАНЕНЫ!", show_alert=True)
+        await message.answer("🚫 ВЫ ЗАБАНЕНЫ!", reply_markup=get_reply_keyboard(user_id))
         return
     
     await message.answer(
@@ -866,7 +869,7 @@ async def reply_additional(message: Message) -> None:
         f"НЕ СТОИТ БОЯТЬСЯ.\n\n"
         f"ИГРА СОЗДАНА ДЛЯ РАЗВЛЕЧЕНИЯ.\n"
         f"ВЫ МОЖЕТЕ ОСТАНОВИТЬСЯ В ЛЮБОЙ МОМЕНТ.",
-        show_alert=True
+        reply_markup=get_reply_keyboard(user_id)
     )
 
 # ============ ФОН: ПРОВЕРКА КУЛДАУНА ============
@@ -901,8 +904,7 @@ async def cooldown_checker(bot: Bot):
         except Exception as e:
             logger.error(f"Ошибка в cooldown_checker: {e}")
         await asyncio.sleep(60)
-
-# ============ WEBHOOK ============
+        # ============ WEBHOOK ============
 async def webhook_handler(request: web.Request) -> web.Response:
     try:
         data = await request.json()
