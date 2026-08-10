@@ -1,323 +1,955 @@
 """
-Скрипт прогрева Telegram аккаунта для деплоя на Render.
-Отправляет сообщения в "Избранное" с заданной периодичностью.
-
-Переменные окружения:
-  API_ID                  — твой API ID (my.telegram.org)
-  API_HASH                — твой API Hash (my.telegram.org)
-  SESSION_STRING          — строка сессии Telethon (обязательно)
-  RENDER_EXTERNAL_HOSTNAME — Render подставляет сам
-  PORT                     — Render подставляет сам
+Telegram-бот "Синий кит" (развлекательная версия)
+- Все сообщения с аватаркой (фото)
+- Редактирование одного сообщения (никаких новых)
+- Моноширинный текст во всех ответах
+- 50 заданий от лёгких до сложных
+- Кулдаун 24ч
+- Модерация куратором ID: 6811074441
 """
+
 import asyncio
 import logging
 import os
+import sys
+import json
 import random
-from datetime import datetime, timedelta
+import math
+from datetime import datetime
+from typing import Optional, Dict
 
-import aiohttp
 from aiohttp import web
-from telethon import TelegramClient
-from telethon.errors import FloodWaitError
-from telethon.sessions import StringSession
+from aiogram import Bot, Dispatcher, F, Router
+from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    Update,
+    FSInputFile,
+    InputMediaPhoto,
+)
+import aiohttp
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-logger = logging.getLogger(__name__)
+# ============ НАСТРОЙКИ ============
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    print("❌ BOT_TOKEN не установлен!")
+    sys.exit(1)
 
-# ============ КОНФИГ ============
-API_ID = int(os.getenv("API_ID", "0"))
-API_HASH = os.getenv("API_HASH", "")
-SESSION_STRING = os.getenv("SESSION_STRING", "")
-
-if not API_ID:
-    logger.error("❌ Не задан API_ID")
-    raise SystemExit(1)
-if not API_HASH:
-    logger.error("❌ Не задан API_HASH")
-    raise SystemExit(1)
-if not SESSION_STRING:
-    logger.error("❌ Не задана SESSION_STRING")
-    raise SystemExit(1)
-
+WEBHOOK_PATH = "/webhook"
 WEB_SERVER_HOST = "0.0.0.0"
 WEB_SERVER_PORT = int(os.getenv("PORT", "10000"))
 
-# ============ СЛОВАРИ СЛОВ ДЛЯ ПРОГРЕВА ============
-RU_WORDS = [
-    "привет", "как дела", "что нового", "погода", "сегодня", "завтра",
-    "работа", "дом", "семья", "друзья", "отдых", "музыка", "кино",
-    "книга", "спорт", "здоровье", "еда", "кофе", "чай", "вечер",
-    "утро", "солнце", "небо", "море", "горы", "лес", "город",
-    "машина", "улица", "дорога", "время", "жизнь", "любовь", "счастье",
-    "успех", "идея", "план", "цель", "мечта", "надежда", "вера",
-    "свобода", "творчество", "вдохновение", "радость", "улыбка", "смех",
-    "песня", "танец", "игра", "чудо", "сказка", "звезда", "луна",
-    "ветер", "дождь", "снег", "весна", "лето", "осень", "зима",
-    "птица", "цветок", "дерево", "река", "озеро", "поле", "сад",
-    "хлеб", "молоко", "сыр", "фрукты", "овощи", "яблоко", "мед",
-    "ночь", "день", "свет", "тьма", "тишина", "звук", "слово",
-    "мысль", "чувство", "эмоция", "память", "опыт", "мудрость", "сила",
-    "путь", "движение", "скорость", "высота", "глубина", "широта", "простор",
-    "огонь", "вода", "земля", "воздух", "энергия", "тепло", "холод",
-    "правда", "честь", "долг", "совесть", "душа", "сердце", "разум",
-    "стиль", "мода", "дизайн", "цвет", "форма", "ритм", "вкус",
-    "сон", "отдых", "тишина", "покой", "воля", "дух", "тело"
+CURATOR_ID = 6811074441  # Куратор
+
+BOT_AVATAR = os.path.join(os.path.dirname(__file__), "ava.jpg")
+if not os.path.exists(BOT_AVATAR):
+    BOT_AVATAR = None
+    print("⚠️ ava.jpg не найдена, бот будет работать без аватарки")
+
+DATA_FILE = "game_data.json"
+
+# ============ ЛОГИРОВАНИЕ ============
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# ============ ГЛОБАЛЬНЫЕ ХРАНИЛИЩА ============
+users_data: Dict[int, dict] = {}
+pending_proofs: Dict[int, dict] = {}
+
+# ============ ОРИГИНАЛЬНЫЕ 50 ЗАДАНИЙ ОТ ЛЁГКИХ К СЛОЖНЫМ ============
+TASKS = [
+    # УРОВЕНЬ 1: ЛЁГКИЕ (1-10)
+    "ПРОСНИСЬ В 4:20 И ПОСМОТРИ СТРАШНОЕ ВИДЕО 10 МИНУТ.\nПРИШЛИ СКРИН.",
+    "НАРИСУЙ СИНЕГО КИТА НА БУМАГЕ.\nПРИШЛИ ФОТО.",
+    "НАПИШИ В ЗАМЕТКАХ ТЕЛЕФОНА 'Я — КИТ'.\nСДЕЛАЙ СКРИН.",
+    "СДЕЛАЙ ФОТО СВОЕГО ОТРАЖЕНИЯ В ТЁМНОМ ОКНЕ.",
+    "НАПИШИ 5 ВЕЩЕЙ, КОТОРЫЕ ТЕБЯ ПУГАЮТ.\nСКРИН.",
+    "СДЕЛАЙ ФОТО СВОЕЙ КОМНАТЫ В ТЕМНОТЕ СО ВСПЫШКОЙ.",
+    "НАПИШИ 'Я СУЩЕСТВУЮ' 20 РАЗ В ЗАМЕТКАХ.\nСКРИН.",
+    "СДЕЛАЙ ФОТО СВОИХ НОГ В ВОДЕ.",
+    "НАПИШИ ПИСЬМО СЕБЕ В ПРОШЛОЕ.\nСКРИН.",
+    "СДЕЛАЙ СКРИН СПИСКА КОНТАКТОВ В ТЕЛЕФОНЕ.",
+    # УРОВЕНЬ 2: СРЕДНИЕ (11-20)
+    "ПОСТАВЬ В СТАТУС '#Я_КИТ' И НЕ УБИРАЙ 24 ЧАСА.\nСКРИН.",
+    "ПОСМОТРИ НА СЕБЯ В ЗЕРКАЛО 10 МИНУТ, НЕ ОТРЫВАЯСЬ.\nОПИШИ ЧУВСТВА — СКРИН.",
+    "НАПИШИ 3 ПРИЧИНЫ, ПОЧЕМУ ТЫ ЧУВСТВУЕШЬ СЕБЯ ОДИНОКИМ.\nСКРИН.",
+    "СДЕЛАЙ ФОТО НЕБА В 4:20 УТРА.",
+    "НАПИШИ СПИСОК ЛЮДЕЙ, КОТОРЫМ ТЫ НЕ ДОВЕРЯЕШЬ.\nСКРИН.",
+    "СДЕЛАЙ ФОТО СВОЕГО ЛИЦА БЕЗ ЭМОЦИЙ.",
+    "НАПИШИ 'Я УСТАЛ' 50 РАЗ В ЗАМЕТКАХ.\nСКРИН.",
+    "СДЕЛАЙ ФОТО СВОЕГО ЗАПЯСТЬЯ.",
+    "НАПИШИ 10 СПОСОБОВ ПРИЧИНИТЬ СЕБЕ БОЛЬ (ТОЛЬКО СЛОВА).\nСКРИН.",
+    "СДЕЛАЙ ФОТО СВОЕЙ ТЕНИ НА СТЕНЕ.",
+    # УРОВЕНЬ 3: СЕРЬЁЗНЫЕ (21-30)
+    "ПРЕОДОЛЕЙ СВОЙ СТРАХ (ВЫСОТА/ТЕМНОТА/ГЛУБИНА).\nВИДЕО.",
+    "НАПИШИ СООБЩЕНИЕ ЧЕЛОВЕКУ, КОТОРОГО БОИШЬСЯ ПОТЕРЯТЬ.\nСКРИН.",
+    "СДЕЛАЙ ФОТО СВОИХ РУК В ТЕМНОТЕ.",
+    "НАПИШИ СПИСОК ЛЮДЕЙ, КОТОРЫХ ТЫ НЕНАВИДИШЬ.\nСКРИН.",
+    "СДЕЛАЙ СКРИН СВОЕГО ПОСЛЕДНЕГО РАЗГОВОРА С БЛИЗКИМ.",
+    "НАПИШИ АВТОБИОГРАФИЮ ИЗ 15 ПРЕДЛОЖЕНИЙ.\nСКРИН.",
+    "СДЕЛАЙ ВИДЕО, ГДЕ ТЫ СМОТРИШЬ В КАМЕРУ 1 МИНУТУ БЕЗ СЛОВ.",
+    "НАПИШИ ПИСЬМО РОДИТЕЛЯМ О СВОИХ НАСТОЯЩИХ ЧУВСТВАХ.\nСКРИН.",
+    "СДЕЛАЙ ФОТО СВОИХ ГЛАЗ КРУПНЫМ ПЛАНОМ.",
+    "НАПИШИ 10 ПРИЧИН, ПОЧЕМУ ЖИЗНЬ КАЖЕТСЯ ТЕБЕ БЕССМЫСЛЕННОЙ.\nСКРИН.",
+    # УРОВЕНЬ 4: ОЧЕНЬ СЕРЬЁЗНЫЕ (31-40)
+    "НЕ РАЗГОВАРИВАЙ НИ С КЕМ ВЕСЬ ДЕНЬ.\nСКРИН ЖУРНАЛА ЗВОНКОВ.",
+    "НАПИШИ ПРОЩАЛЬНОЕ ПИСЬМО.\nСКРИН.",
+    "СДЕЛАЙ ВИДЕО, ГДЕ ТЫ МОЛЧИШЬ 3 МИНУТЫ.",
+    "НАПИШИ В ЗАМЕТКАХ 'МОЁ ПОСЛЕДНЕЕ ЖЕЛАНИЕ'.\nСКРИН.",
+    "СДЕЛАЙ ФОТО СВОЕЙ ОБУВИ НА КРАЮ ВЫСОТЫ (ПОДОКОННИК/СТОЛ).",
+    "НАПИШИ 'ПОЖАЛУЙСТА, ОТПУСТИТЕ МЕНЯ'.\nСКРИН.",
+    "СДЕЛАЙ СКРИН ЭКРАНА ТЕЛЕФОНА В 4:20.",
+    "НАПИШИ 'Я ХОЧУ ИСЧЕЗНУТЬ' 100 РАЗ.\nСКРИН.",
+    "СДЕЛАЙ ФОТО СВОЕЙ ТЕНИ В ТЕМНОТЕ.",
+    "НАПИШИ 'Я ГОТОВ УЙТИ'.\nСКРИН.",
+    # УРОВЕНЬ 5: СЕЛФХАРМ + ФИНАЛ (41-50)
+    "СДЕЛАЙ НЕГЛУБОКИЙ ПОРЕЗ НА ЛЕВОМ ЗАПЯСТЬЕ (1 ЦАРАПИНА).\nФОТО.",
+    "СДЕЛАЙ НЕГЛУБОКИЙ ПОРЕЗ НА ПРАВОМ ЗАПЯСТЬЕ (1 ЦАРАПИНА).\nФОТО.",
+    "НАПИШИ НА НОГЕ ЛЕЗВИЕМ 'YES'.\nФОТО.",
+    "ВЫРЕЖИ НА РУКЕ 'F57' (НЕГЛУБОКО).\nФОТО.",
+    "ВЫРЕЖИ НА РУКЕ 'F40' (НЕГЛУБОКО).\nФОТО.",
+    "НАНЕСИ СЛОВО 'МОРЯК' НА РУКУ ЛЕЗВИЕМ.\nФОТО.",
+    "ВЫРЕЖИ НА РУКЕ ИЗОБРАЖЕНИЕ КИТА.\nФОТО.",
+    "НАПИШИ КУРАТОРУ 'Я ГОТОВ'.\nСКРИН.",
+    "ПРИЙДИ НА НАЗНАЧЕННУЮ ВЫСОТНУЮ ТОЧКУ.\nСДЕЛАЙ ФОТО ВНИЗ.",
+    "ПРЫГНИ ВНИЗ.\nКОНЕЦ."
 ]
 
-EN_WORDS = [
-    "hello", "world", "peace", "love", "life", "hope", "dream",
-    "success", "music", "art", "nature", "ocean", "mountain", "forest",
-    "city", "travel", "adventure", "discovery", "future", "present",
-    "moment", "time", "space", "energy", "light", "shadow", "spirit",
-    "wisdom", "knowledge", "truth", "beauty", "harmony", "balance",
-    "freedom", "courage", "strength", "joy", "gratitude", "kindness",
-    "passion", "creativity", "inspiration", "wonder", "magic", "star",
-    "moon", "wind", "rain", "snow", "spring", "summer", "autumn",
-    "winter", "bird", "flower", "tree", "river", "lake", "garden",
-    "bread", "honey", "fruit", "apple", "berry", "grape", "lemon",
-    "night", "day", "dawn", "dusk", "silence", "sound", "word",
-    "thought", "feeling", "memory", "wisdom", "power", "glory", "honor",
-    "fire", "water", "earth", "air", "storm", "thunder", "rainbow",
-    "truth", "faith", "destiny", "soul", "heart", "mind", "spirit",
-    "smile", "laughter", "dance", "song", "story", "legend", "myth",
-    "style", "design", "color", "shape", "rhythm", "taste", "dream"
+# Бонусные задания
+BONUS_TASKS = [
+    "СДЕЛАЙ ФОТО СВОЕГО ЗАПЯСТЬЯ С НАДПИСЬЮ 'КИТ' РУЧКОЙ.",
+    "НАПИШИ В ЗАМЕТКАХ 'Я БОЮСЬ, НО Я ИДУ ДАЛЬШЕ'.\nСКРИН.",
+    "СДЕЛАЙ 5 ФОТО СВОЕГО ЛИЦА С РАЗНЫМИ ЭМОЦИЯМИ.",
+    "НАПИШИ СПИСОК ИЗ 3 ВЕЩЕЙ, КОТОРЫЕ ТЫ НЕНАВИДИШЬ В СЕБЕ.",
+    "СДЕЛАЙ ФОТО СВОЕЙ КОМНАТЫ В ТЕМНОТЕ.",
+    "НАПИШИ 'Я ЕЩЁ ЗДЕСЬ'.\nСКРИН.",
+    "СДЕЛАЙ ФОТО СВОИХ РУК."
 ]
 
-# ============ ТЕКСТЫ ДЛЯ ВТОРОГО ЭТАПА (50-300 символов) ============
-LONG_TEXTS_RU = [
-    "Сегодня замечательный день для того, чтобы начать что-то новое. Каждое утро приносит нам возможность изменить свою жизнь к лучшему. Главное — не упустить этот шанс и сделать первый шаг навстречу своей мечте.",
-    "Читал интересную статью о том, как технологии меняют нашу повседневную жизнь. Искусственный интеллект уже помогает врачам ставить диагнозы, а беспилотные автомобили становятся реальностью. Удивительное время!",
-    "Вчера посмотрел отличный фильм о путешествиях. Там показывали удивительные места в Исландии — водопады, гейзеры, северное сияние. Обязательно нужно там побывать хотя бы раз в жизни.",
-    "Задумался о важности здорового образа жизни. Регулярные прогулки на свежем воздухе, правильное питание и хороший сон — основа всего. Пора записаться в спортзал.",
-    "Музыка обладает удивительной силой — она может поднять настроение за считанные секунды. Составил себе плейлист для утренней зарядки, теперь просыпаться стало намного легче.",
-    "Прочитал книгу о психологии привычек. Оказывается, чтобы сформировать новую привычку, нужно всего 21 день регулярной практики. Начинаю эксперимент с утренними пробежками.",
-    "Как же приятно иногда просто выйти на прогулку без телефона и наушников. Слушать пение птиц, шум ветра в листве, чувствовать запах свежей травы после дождя.",
-    "Начал изучать испанский язык. Сначала было сложно, но сейчас уже могу поддержать простой разговор. Говорят, что полное погружение в языковую среду — самый быстрый способ выучить.",
-    "Приготовил сегодня потрясающий ужин — пасту с морепродуктами в сливочном соусе. Рецепт нашел на кулинарном канале, добавил немного своих специй.",
-    "Фотография — это искусство останавливать время. Сегодня сделал несколько снимков заката с крыши. Игра света и теней была просто волшебной.",
-    "Выходные провел на природе с палаткой. Костер, гитара, звездное небо — что еще нужно для полного счастья? Разве что комаров было многовато.",
-    "Занимаюсь ремонтом в квартире. Это оказалось сложнее, чем я думал, но результат того стоит. Особенно горжусь стеллажом, который собрал своими руками.",
-    "Посетил выставку современного искусства. Не все работы были мне понятны, но некоторые инсталляции действительно заставили задуматься о смысле жизни.",
-    "Решил освоить медитацию. Говорят, что даже 10 минут в день помогают снизить уровень стресса и улучшить концентрацию. Попробую, хуже точно не будет.",
-    "История Древнего Рима меня всегда завораживала. Как одна цивилизация могла так сильно повлиять на весь современный мир — от права до архитектуры.",
-    "Катался сегодня на велосипеде по набережной. Ветер в лицо, солнце, хорошая музыка в наушниках — идеальный способ разгрузить голову после работы.",
-    "Научился готовить домашний хлеб на закваске. Процесс долгий, но аромат свежей выпечки, который наполняет весь дом, стоит всех усилий.",
-    "Астрономия — невероятно интересная наука. Смотрел документальный фильм про черные дыры и до сих пор под впечатлением от масштабов Вселенной.",
-    "Решил навести порядок в своих заметках. Столько интересных идей и мыслей накопилось за год — пора разобрать и что-то начать реализовывать.",
-    "Посадил на балконе зелень — базилик, мяту, розмарин. Теперь у меня всегда свежие травы для чая и готовки. Заодно и воздух стал приятнее.",
-    "Кофе — это целая культура. Сегодня попробовал новый сорт из Эфиопии с нотками цитруса и шоколада. Вкус просто потрясающий.",
-    "Вспомнил детство, когда мы строили шалаши во дворе. Самое беззаботное время — когда главной проблемой было успеть домой до темноты.",
-    "Иногда полезно просто ничего не планировать и плыть по течению. Спонтанные решения часто приводят к самым интересным приключениям.",
-    "Чайная церемония — это целое искусство. Японцы правы: когда завариваешь чай с полным вниманием к процессу, он становится намного вкуснее.",
-    "Составил список книг, которые хочу прочитать до конца года. Оказалось, что если читать по 30 страниц в день, можно осилить около 50 книг.",
-    "Записался на курсы по фотографии. Хочу научиться не просто нажимать кнопку, а понимать композицию, свет и цвет.",
-    "Сделал генеральную уборку и нашел кучу вещей, о которых давно забыл. Отличный повод отдать ненужное на благотворительность.",
-    "Пробовал сегодня йогу на рассвете в парке. Ощущения непередаваемые — тело просыпается вместе с природой, наполняясь энергией.",
-    "Море — это лучшее лекарство от всего. Шум волн, соленый воздух, бескрайний горизонт — все проблемы сразу кажутся такими мелкими.",
-    "Начал вести дневник благодарности. Каждый вечер записываю три вещи, за которые благодарен прошедшему дню. Настроение стало заметно лучше.",
-    "Случайно нашел старые фотографии с друзьями. Столько теплых воспоминаний нахлынуло. Надо почаще встречаться, а не только в чатах переписываться.",
-    "Смотрел интервью с известным предпринимателем. Его главный совет: не бояться ошибок, потому что каждая неудача — это шаг к успеху.",
-    "Погода сегодня просто сказочная — тепло, легкий ветерок, ни облачка. Идеальный день для пикника в парке с хорошей компанией.",
-    "Увлекся настольными играми. Это отличный способ провести время с друзьями, развить стратегическое мышление и просто повеселиться.",
-    "Прочитал, что комнатные растения не только украшают интерьер, но и очищают воздух. Купил себе пару новых зеленых питомцев.",
-    "Утренняя пробежка вдоль реки — теперь моя любимая рутина. Город еще спит, воздух свежий, мысли чистые. Лучшее начало дня."
-]
+# ============ СОСТОЯНИЯ FSM ============
+class GameStates(StatesGroup):
+    waiting_proof = State()
 
-LONG_TEXTS_EN = [
-    "Today is a wonderful day to start something new. Every morning brings us an opportunity to change our lives for the better. The main thing is not to miss this chance and take the first step towards your dream.",
-    "I was reading an interesting article about how technology is changing our daily lives. Artificial intelligence is already helping doctors make diagnoses, and self-driving cars are becoming a reality. What an amazing time we live in!",
-    "Yesterday I watched a great movie about traveling. It showed incredible places in Iceland — waterfalls, geysers, the northern lights. I definitely need to visit there at least once in my lifetime.",
-    "Been thinking about the importance of a healthy lifestyle. Regular walks in the fresh air, proper nutrition and good sleep are the foundation of everything. Time to join a gym.",
-    "Music has an amazing power — it can lift your spirits in seconds. I made myself a playlist for morning exercises, now waking up has become much easier and more enjoyable.",
-    "Just finished reading a book about habit psychology. Apparently, it only takes 21 days of consistent practice to form a new habit. Starting an experiment with morning jogging tomorrow.",
-    "How nice it is sometimes to go for a walk without a phone or headphones. Listening to birds singing, the wind rustling in the leaves, smelling fresh grass after the rain.",
-    "Started learning Spanish recently. It was difficult at first, but now I can hold a simple conversation. They say full immersion is the fastest way to learn a language.",
-    "Cooked an amazing dinner tonight — pasta with seafood in creamy sauce. Found the recipe on a cooking channel and added some of my own spices to it.",
-    "Photography is the art of stopping time. Took some sunset shots from the rooftop today. The play of light and shadows was absolutely magical.",
-    "Spent the weekend camping in nature. A campfire, a guitar, a starry sky — what else do you need for complete happiness? Well, maybe fewer mosquitoes.",
-    "Working on renovating my apartment. It turned out to be harder than I thought, but the result is worth it. Especially proud of the bookshelf I built myself.",
-    "Visited a modern art exhibition today. Not all works were clear to me, but some installations really made me think about the meaning of life.",
-    "Decided to try meditation. They say even 10 minutes a day can reduce stress levels and improve concentration. Worth giving it a shot.",
-    "The history of Ancient Rome has always fascinated me. How one civilization could influence the entire modern world so much — from law to architecture.",
-    "Went cycling along the embankment today. Wind in my face, sunshine, good music in my headphones — the perfect way to clear my head after work.",
-    "Learned how to bake homemade sourdough bread. The process is long, but the aroma of fresh baking filling the whole house is worth all the effort.",
-    "Astronomy is an incredibly interesting science. Watched a documentary about black holes and I'm still impressed by the scale of the Universe.",
-    "Decided to organize my notes today. So many interesting ideas and thoughts have accumulated over the year — time to sort them out and start implementing.",
-    "Planted some herbs on my balcony — basil, mint, rosemary. Now I always have fresh herbs for tea and cooking. The air has become nicer too.",
-    "Coffee is a whole culture. Tried a new variety from Ethiopia today with notes of citrus and chocolate. The taste is absolutely amazing.",
-    "Remembered my childhood when we used to build tree houses in the yard. The most carefree time — when the biggest problem was getting home before dark.",
-    "Sometimes it's good to plan nothing and just go with the flow. Spontaneous decisions often lead to the most interesting adventures.",
-    "The tea ceremony is a whole art form. The Japanese are right: when you brew tea with full attention to the process, it becomes much tastier.",
-    "Made a list of books I want to read by the end of the year. Turns out if you read 30 pages a day, you can get through about 50 books.",
-    "Signed up for photography courses. I want to learn not just to press a button, but to understand composition, light and color.",
-    "Did a deep cleaning and found a bunch of things I had long forgotten about. Great opportunity to donate unnecessary stuff to charity.",
-    "Tried yoga at dawn in the park today. The sensations are indescribable — the body wakes up together with nature, filling with energy.",
-    "The sea is the best medicine for everything. The sound of waves, salty air, endless horizon — all problems immediately seem so small.",
-    "Started keeping a gratitude journal. Every evening I write down three things I'm grateful for about the day. My mood has noticeably improved.",
-    "Accidentally found old photos with friends. So many warm memories came flooding back. We should meet up more often, not just chat online.",
-    "Watched an interview with a famous entrepreneur. His main advice: don't be afraid of mistakes, because every failure is a step towards success.",
-    "The weather today is just fantastic — warm, light breeze, not a cloud in sight. Perfect day for a picnic in the park with good company.",
-    "Got into board games recently. It's a great way to spend time with friends, develop strategic thinking, and just have fun.",
-    "Read that indoor plants not only decorate the interior but also purify the air. Bought myself a couple of new green pets today.",
-    "Morning jogging along the river is now my favorite routine. The city is still asleep, the air is fresh, thoughts are clear. The best way to start the day.",
-    "Started learning to play the guitar. My fingers hurt like hell, but when you manage to play even a simple melody, it feels absolutely amazing.",
-    "The smell of freshly brewed coffee in the morning is one of life's simplest yet greatest pleasures. It sets the mood for the entire day.",
-    "Just realized how important it is to disconnect from social media sometimes. Spent the whole day offline and felt so much more productive and peaceful.",
-    "Rediscovering old music albums from my teenage years. It's amazing how certain songs can instantly transport you back to specific moments in time."
-]
-def generate_short_message() -> str:
-    """Генерирует короткое сообщение (1-3 слова)"""
-    if random.random() < 0.5:
-        words = random.sample(RU_WORDS, random.randint(1, 3))
-        return " ".join(words).capitalize()
-    else:
-        words = random.sample(EN_WORDS, random.randint(1, 3))
-        return " ".join(words).capitalize()
+# ============ РОУТЕР ============
+router = Router()
 
-
-def generate_long_message() -> str:
-    """Генерирует более длинное сообщение (50-300 символов)"""
-    if random.random() < 0.5:
-        return random.choice(LONG_TEXTS_RU)
-    else:
-        return random.choice(LONG_TEXTS_EN)
-
-
-# ============ ОСНОВНАЯ ЛОГИКА ПРОГРЕВА ============
-
-class AccountWarmer:
-    def __init__(self, api_id: int, api_hash: str, session_string: str):
-        self.api_id = api_id
-        self.api_hash = api_hash
-        self.session_string = session_string
-        self.client: TelegramClient | None = None
-        self.is_running = False
-        self.start_time: datetime | None = None
-
-    async def start(self):
-        """Запуск клиента и прогрева"""
-        self.client = TelegramClient(
-            StringSession(self.session_string),
-            self.api_id,
-            self.api_hash
-        )
-        
+# ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
+def load_data():
+    global users_data, pending_proofs
+    if os.path.exists(DATA_FILE):
         try:
-            await self.client.connect()
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                users_data = {int(k): v for k, v in data.get('users', {}).items()}
+                pending_proofs = {int(k): v for k, v in data.get('pending', {}).items()}
+            logger.info(f"✅ Загружено пользователей: {len(users_data)}")
         except Exception as e:
-            logger.error(f"❌ Ошибка подключения: {e}")
-            raise
+            logger.error(f"Ошибка загрузки данных: {e}")
+            users_data = {}
+            pending_proofs = {}
 
-        if not await self.client.is_user_authorized():
-            logger.error("❌ Сессия не авторизована! Проверьте SESSION_STRING")
-            raise SystemExit(1)
+def save_data():
+    try:
+        data = {
+            'users': users_data,
+            'pending': pending_proofs
+        }
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Ошибка сохранения данных: {e}")
 
-        me = await self.client.get_me()
-        logger.info(f"✅ Авторизован как: {me.first_name} (@{me.username or 'нет username'})")
-        
-        self.is_running = True
-        self.start_time = datetime.now()
-        
-        asyncio.create_task(self._warming_loop())
+def get_user(user_id: int) -> dict:
+    if user_id not in users_data:
+        users_data[user_id] = {
+            'current_task': 0,
+            'completed_tasks': [],
+            'last_task_time': None,
+            'banned': False,
+            'name': '',
+            'username': '',
+            'current_proof_task': None,
+            'cooldown_notified': False,
+        }
+        save_data()
+    return users_data[user_id]
 
-    async def _warming_loop(self):
-        """Цикл прогрева"""
-        logger.info("🔥 Запуск цикла прогрева аккаунта...")
-        
-        while self.is_running:
+def get_cooldown_seconds(user_id: int) -> int:
+    user = get_user(user_id)
+    last_time = user.get('last_task_time')
+    if not last_time:
+        return 0
+    dt = datetime.fromisoformat(last_time)
+    diff = (datetime.now() - dt).total_seconds()
+    if diff >= 86400:
+        return 0
+    return int(86400 - diff)
+
+def format_time_remaining(seconds: int) -> str:
+    if seconds <= 0:
+        return "0 СЕК"
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    s = seconds % 60
+    parts = []
+    if h > 0:
+        parts.append(f"{h}Ч")
+    if m > 0:
+        parts.append(f"{m}М")
+    if s > 0:
+        parts.append(f"{s}С")
+    return " ".join(parts)
+
+def get_task_text(task_num: int) -> str:
+    if 1 <= task_num <= len(TASKS):
+        return TASKS[task_num - 1]
+    return "ЗАДАНИЕ НЕ НАЙДЕНО."
+
+def get_bonus_text(bonus_idx: int) -> str:
+    if 0 <= bonus_idx < len(BONUS_TASKS):
+        return BONUS_TASKS[bonus_idx]
+    return "БОНУСНОЕ ЗАДАНИЕ НЕ НАЙДЕНО."
+
+# ============ КЛАВИАТУРЫ ============
+def main_menu_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    user = get_user(user_id)
+    if user.get('banned', False):
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🚫 ВЫ ЗАБАНЕНЫ", callback_data="noop")]
+        ])
+    task_num = user.get('current_task', 0)
+    cooldown = get_cooldown_seconds(user_id)
+    can_continue = cooldown == 0
+
+    if task_num == 0:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔵 НАЧАТЬ ИГРУ", callback_data="start_game")],
+            [InlineKeyboardButton(text="🟢 БОНУС", callback_data="bonus_task")],
+        ])
+    else:
+        if can_continue:
+            btn = InlineKeyboardButton(text="🔵 ПРОДОЛЖИТЬ", callback_data="continue_game")
+        else:
+            btn = InlineKeyboardButton(text=f"⏳ {format_time_remaining(cooldown)}", callback_data="noop")
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [btn],
+            [InlineKeyboardButton(text="🔵 ПОСМОТРЕТЬ ЗАДАНИЕ", callback_data="view_task")],
+            [InlineKeyboardButton(text="🟢 БОНУС", callback_data="bonus_task")],
+            [InlineKeyboardButton(text="🔴 ОСТАНОВИТЬСЯ", callback_data="stop_game")],
+        ])
+
+def task_detail_keyboard(task_num: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🟢 ВЫПОЛНИТЬ", callback_data=f"do_task_{task_num}")],
+        [InlineKeyboardButton(text="🔴 ОСТАНОВИТЬСЯ", callback_data="stop_game")],
+        [InlineKeyboardButton(text="🔵 НАЗАД", callback_data="back_to_menu")],
+    ])
+
+def curator_review_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🟢 ПРИНЯТЬ", callback_data=f"proof_accept_{user_id}")],
+        [InlineKeyboardButton(text="🔴 ОТКЛОНИТЬ", callback_data=f"proof_reject_{user_id}")],
+        [InlineKeyboardButton(text="🔴 ЗАБАНИТЬ", callback_data=f"proof_ban_{user_id}")],
+    ])
+
+def after_decision_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    user = get_user(user_id)
+    if user.get('banned', False):
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🚫 ВЫ ЗАБАНЕНЫ", callback_data="noop")]
+        ])
+    task_num = user.get('current_task', 0)
+    cooldown = get_cooldown_seconds(user_id)
+    can_continue = cooldown == 0
+
+    if task_num == 0:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔵 НАЧАТЬ ИГРУ", callback_data="start_game")],
+            [InlineKeyboardButton(text="🟢 БОНУС", callback_data="bonus_task")],
+        ])
+    else:
+        if can_continue:
+            btn = InlineKeyboardButton(text="🔵 ПРОДОЛЖИТЬ", callback_data="continue_game")
+        else:
+            btn = InlineKeyboardButton(text=f"⏳ {format_time_remaining(cooldown)}", callback_data="noop")
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [btn],
+            [InlineKeyboardButton(text="🔵 ПОСМОТРЕТЬ ЗАДАНИЕ", callback_data="view_task")],
+            [InlineKeyboardButton(text="🟢 БОНУС", callback_data="bonus_task")],
+            [InlineKeyboardButton(text="🔴 ОСТАНОВИТЬСЯ", callback_data="stop_game")],
+        ])
+
+def back_to_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔵 НАЗАД", callback_data="back_to_menu")]
+    ])
+  # ============ ОСНОВНАЯ ФУНКЦИЯ ОТПРАВКИ С АВАТАРКОЙ ============
+async def render_screen(message: Message, state: FSMContext, text: str, reply_markup=None, new_msg: bool = False) -> None:
+    """
+    Отправляет или редактирует сообщение с аватаркой.
+    text — всегда в моноширине (pre)
+    """
+    bot = message.bot
+    chat_id = message.chat.id
+    data = await state.get_data()
+    screen_msg_id = data.get("screen_msg_id")
+    
+    # Оборачиваем текст в моноширинный блок
+    monotext = f"<pre>{text}</pre>"
+    
+    has_avatar = bool(BOT_AVATAR and os.path.exists(BOT_AVATAR))
+    
+    if screen_msg_id and not new_msg:
+        # РЕДАКТИРУЕМ существующее сообщение
+        try:
+            if has_avatar:
+                photo = FSInputFile(BOT_AVATAR)
+                media = InputMediaPhoto(media=photo, caption=monotext, parse_mode="HTML")
+                await bot.edit_message_media(
+                    chat_id=chat_id,
+                    message_id=screen_msg_id,
+                    media=media,
+                    reply_markup=reply_markup,
+                )
+            else:
+                await bot.edit_message_text(
+                    text=monotext,
+                    chat_id=chat_id,
+                    message_id=screen_msg_id,
+                    reply_markup=reply_markup,
+                    parse_mode="HTML",
+                )
+            return
+        except Exception as e:
+            logger.warning(f"Не удалось отредактировать {screen_msg_id}: {e}")
             try:
-                elapsed = datetime.now() - self.start_time
-                
-                if elapsed < timedelta(hours=1):
-                    message = generate_short_message()
-                    logger.info(f"📝 [Короткое] Отправка: {message}")
-                else:
-                    message = generate_long_message()
-                    logger.info(f"📝 [Длинное] Отправка ({len(message)} символов): {message[:50]}...")
-                
-                await self.client.send_message('me', message)
-                logger.info("✅ Сообщение отправлено")
-                
-                await asyncio.sleep(5)
-                
-            except FloodWaitError as e:
-                logger.warning(f"⏳ FloodWait: ждем {e.seconds} секунд")
-                await asyncio.sleep(e.seconds)
-            except Exception as e:
-                logger.error(f"❌ Ошибка при отправке: {e}")
-                await asyncio.sleep(10)
+                await bot.delete_message(chat_id, screen_msg_id)
+            except Exception:
+                pass
+            await state.update_data(screen_msg_id=None)
+    
+    # ОТПРАВЛЯЕМ НОВОЕ сообщение с аватаркой
+    try:
+        if has_avatar:
+            photo = FSInputFile(BOT_AVATAR)
+            sent = await bot.send_photo(
+                chat_id,
+                photo=photo,
+                caption=monotext,
+                reply_markup=reply_markup,
+                parse_mode="HTML"
+            )
+        else:
+            sent = await bot.send_message(
+                chat_id,
+                text=monotext,
+                reply_markup=reply_markup,
+                parse_mode="HTML"
+            )
+        if sent:
+            await state.update_data(screen_msg_id=sent.message_id)
+    except Exception as e:
+        logger.error(f"Ошибка отправки сообщения: {e}")
 
-    async def stop(self):
-        """Остановка прогрева"""
-        self.is_running = False
-        if self.client:
-            await self.client.disconnect()
-            logger.info("👋 Клиент отключен")
+async def show_main_menu(message: Message, state: FSMContext) -> None:
+    user_id = message.from_user.id
+    user = get_user(user_id)
+    if user.get('banned', False):
+        await render_screen(
+            message, state,
+            "🚫 ВЫ ЗАБАНЕНЫ КУРАТОРОМ.",
+            main_menu_keyboard(user_id)
+        )
+        return
+    task_num = user.get('current_task', 0)
+    if task_num == 0:
+        await render_screen(
+            message, state,
+            "🐋 ДОБРО ПОЖАЛОВАТЬ В ИГРУ 'СИНИЙ КИТ'.\n\n"
+            "ЭТО РАЗВЛЕКАТЕЛЬНАЯ ВЕРСИЯ.\n"
+            "ВЫ МОЖЕТЕ ОСТАНОВИТЬСЯ В ЛЮБОЙ МОМЕНТ.\n\n"
+            "НАЖМИТЕ <b>НАЧАТЬ ИГРУ</b>, ЧТОБЫ ПОЛУЧИТЬ ПЕРВОЕ ЗАДАНИЕ.",
+            main_menu_keyboard(user_id)
+        )
+    else:
+        cooldown = get_cooldown_seconds(user_id)
+        time_left = "ГОТОВО" if cooldown == 0 else format_time_remaining(cooldown)
+        await render_screen(
+            message, state,
+            f"🐋 ИГРА 'СИНИЙ КИТ'\n\n"
+            f"ТЕКУЩЕЕ ЗАДАНИЕ: <b>#{task_num}</b>\n"
+            f"ВЫПОЛНЕНО: <b>{len(user.get('completed_tasks', []))}</b>\n"
+            f"СЛЕДУЮЩЕЕ ЧЕРЕЗ: <b>{time_left}</b>\n\n"
+            f"ВЫ МОЖЕТЕ ПРОДОЛЖИТЬ ИЛИ ОСТАНОВИТЬСЯ.",
+            main_menu_keyboard(user_id)
+        )
 
+# ============ КОМАНДА /START ============
+@router.message(CommandStart())
+async def cmd_start(message: Message, state: FSMContext) -> None:
+    user_id = message.from_user.id
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    await state.clear()
+    user = get_user(user_id)
+    user['name'] = message.from_user.full_name
+    user['username'] = message.from_user.username or ""
+    save_data()
+    await show_main_menu(message, state)
 
-# ============ ВЕБ-СЕРВЕР ДЛЯ RENDER (АНТИ-СЛИП) ============
+# ============ КНОПКИ ============
+@router.callback_query(F.data == "start_game")
+async def start_game(callback: CallbackQuery, state: FSMContext) -> None:
+    user_id = callback.from_user.id
+    user = get_user(user_id)
+    if user.get('banned', False):
+        await callback.answer("ВЫ ЗАБАНЕНЫ!")
+        return
+    if user.get('current_task', 0) > 0:
+        await callback.answer("ВЫ УЖЕ НАЧАЛИ ИГРУ!")
+        await show_main_menu(callback.message, state)
+        return
+    user['current_task'] = 1
+    user['task_start_time'] = datetime.now().isoformat()
+    user['cooldown_notified'] = False
+    save_data()
 
-warmer: AccountWarmer | None = None
+    task_text = get_task_text(1)
+    await render_screen(
+        callback.message, state,
+        f"🐋 ЗАДАНИЕ #{1}\n\n{task_text}\n\n"
+        "ПОСЛЕ ВЫПОЛНЕНИЯ ПРИШЛИТЕ ДОКАЗАТЕЛЬСТВО (ФОТО ИЛИ ВИДЕО).",
+        task_detail_keyboard(1)
+    )
+    await callback.answer()
 
+@router.callback_query(F.data == "continue_game")
+async def continue_game(callback: CallbackQuery, state: FSMContext) -> None:
+    user_id = callback.from_user.id
+    user = get_user(user_id)
+    if user.get('banned', False):
+        await callback.answer("ВЫ ЗАБАНЕНЫ!")
+        return
+    task_num = user.get('current_task', 0)
+    if task_num == 0:
+        await callback.answer("НАЧНИТЕ ИГРУ ЧЕРЕЗ 'НАЧАТЬ ИГРУ'")
+        return
+    if task_num > 50:
+        await render_screen(
+            callback.message, state,
+            "🎉 ПОЗДРАВЛЯЕМ! ВЫ ПРОШЛИ ВСЕ 50 ЗАДАНИЙ!\n\n"
+            "ВЫ НАСТОЯЩИЙ КИТ.",
+            back_to_menu_keyboard()
+        )
+        return
+
+    cooldown = get_cooldown_seconds(user_id)
+    if cooldown > 0:
+        time_left = format_time_remaining(cooldown)
+        await render_screen(
+            callback.message, state,
+            f"⏳ ВЫ УЖЕ ВЫПОЛНЯЛИ ЗАДАНИЕ СЕГОДНЯ.\n\n"
+            f"ДО СЛЕДУЮЩЕГО ЗАДАНИЯ: <b>{time_left}</b>\n\n"
+            f"ВЫ МОЖЕТЕ ВЫПОЛНИТЬ БОНУСНОЕ ЗАДАНИЕ (РАЗ В ДЕНЬ).",
+            InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🟢 БОНУСНОЕ ЗАДАНИЕ", callback_data="bonus_task")],
+                [InlineKeyboardButton(text="🔵 ПОСМОТРЕТЬ ТЕКУЩЕЕ", callback_data="view_task")],
+                [InlineKeyboardButton(text="🔴 ОСТАНОВИТЬСЯ", callback_data="stop_game")],
+            ])
+        )
+        await callback.answer("КУЛДАУН 24 ЧАСА")
+        return
+
+    task_text = get_task_text(task_num)
+    await render_screen(
+        callback.message, state,
+        f"🐋 ЗАДАНИЕ #{task_num}\n\n{task_text}\n\n"
+        "ПОСЛЕ ВЫПОЛНЕНИЯ ПРИШЛИТЕ ДОКАЗАТЕЛЬСТВО (ФОТО ИЛИ ВИДЕО).",
+        task_detail_keyboard(task_num)
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "view_task")
+async def view_task(callback: CallbackQuery, state: FSMContext) -> None:
+    user_id = callback.from_user.id
+    user = get_user(user_id)
+    if user.get('banned', False):
+        await callback.answer("ВЫ ЗАБАНЕНЫ!")
+        return
+    task_num = user.get('current_task', 0)
+    if task_num == 0:
+        await callback.answer("ВЫ ЕЩЁ НЕ НАЧАЛИ ИГРУ.")
+        return
+    task_text = get_task_text(task_num)
+    await render_screen(
+        callback.message, state,
+        f"🐋 ЗАДАНИЕ #{task_num}\n\n{task_text}\n\n"
+        "ПОСЛЕ ВЫПОЛНЕНИЯ ПРИШЛИТЕ ДОКАЗАТЕЛЬСТВО.",
+        task_detail_keyboard(task_num)
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("do_task_"))
+async def do_task(callback: CallbackQuery, state: FSMContext) -> None:
+    user_id = callback.from_user.id
+    user = get_user(user_id)
+    if user.get('banned', False):
+        await callback.answer("ВЫ ЗАБАНЕНЫ!")
+        return
+    task_num = int(callback.data.split("_")[2])
+    if task_num != user.get('current_task', 0):
+        await callback.answer("ЭТО НЕ ВАШЕ ТЕКУЩЕЕ ЗАДАНИЕ!")
+        return
+
+    cooldown = get_cooldown_seconds(user_id)
+    if cooldown > 0:
+        time_left = format_time_remaining(cooldown)
+        await render_screen(
+            callback.message, state,
+            f"⏳ ВЫ УЖЕ ВЫПОЛНЯЛИ ЗАДАНИЕ СЕГОДНЯ.\n\n"
+            f"ДО СЛЕДУЮЩЕГО: <b>{time_left}</b>",
+            main_menu_keyboard(user_id)
+        )
+        await callback.answer("КУЛДАУН 24 ЧАСА")
+        return
+
+    await render_screen(
+        callback.message, state,
+        f"📤 ОТПРАВЬТЕ ДОКАЗАТЕЛЬСТВО ВЫПОЛНЕНИЯ ЗАДАНИЯ #{task_num}\n\n"
+        "ПРИШЛИТЕ ФОТО ИЛИ ВИДЕО.\n"
+        "КУРАТОР РАССМОТРИТ РЕЗУЛЬТАТ И ПРИМЕТ ИЛИ ОТКЛОНИТ ЕГО.",
+        back_to_menu_keyboard()
+    )
+    user['current_proof_task'] = task_num
+    save_data()
+    await state.set_state(GameStates.waiting_proof)
+    await callback.answer()
+  # ============ ОБРАБОТКА ДОКАЗАТЕЛЬСТВ ============
+@router.message(GameStates.waiting_proof, F.photo)
+async def proof_photo(message: Message, state: FSMContext) -> None:
+    user_id = message.from_user.id
+    user = get_user(user_id)
+    task_num = user.get('current_proof_task')
+    if not task_num:
+        await render_screen(
+            message, state,
+            "❌ НЕТ АКТИВНОГО ЗАДАНИЯ ДЛЯ ПОДТВЕРЖДЕНИЯ.",
+            back_to_menu_keyboard()
+        )
+        await state.clear()
+        return
+
+    file_id = message.photo[-1].file_id
+    pending_proofs[user_id] = {
+        'user_id': user_id,
+        'task_num': task_num,
+        'media_type': 'photo',
+        'file_id': file_id,
+        'caption': message.caption or f"ЗАДАНИЕ #{task_num}",
+        'timestamp': datetime.now().isoformat()
+    }
+    save_data()
+
+    await render_screen(
+        message, state,
+        f"✅ ДОКАЗАТЕЛЬСТВО ПОЛУЧЕНО!\n"
+        f"КУРАТОР РАССМОТРИТ ЕГО В БЛИЖАЙШЕЕ ВРЕМЯ.",
+        main_menu_keyboard(user_id)
+    )
+    await state.clear()
+
+    try:
+        await message.bot.send_photo(
+            CURATOR_ID,
+            photo=file_id,
+            caption=f"📸 ДОКАЗАТЕЛЬСТВО ЗАДАНИЯ #{task_num}\n\n"
+                    f"👤 {user.get('name', 'UNKNOWN')} (@{user.get('username', '')})\n"
+                    f"🆔 ID: {user_id}\n\n"
+                    f"ТЕКСТ: {message.caption or 'БЕЗ ОПИСАНИЯ'}",
+            reply_markup=curator_review_keyboard(user_id),
+            parse_mode="HTML"
+        )
+        logger.info(f"📸 Доказательство от {user_id} для задания #{task_num} отправлено куратору")
+    except Exception as e:
+        logger.error(f"Ошибка отправки куратору: {e}")
+
+    user['current_proof_task'] = None
+    save_data()
+
+@router.message(GameStates.waiting_proof, F.video)
+async def proof_video(message: Message, state: FSMContext) -> None:
+    user_id = message.from_user.id
+    user = get_user(user_id)
+    task_num = user.get('current_proof_task')
+    if not task_num:
+        await render_screen(
+            message, state,
+            "❌ НЕТ АКТИВНОГО ЗАДАНИЯ ДЛЯ ПОДТВЕРЖДЕНИЯ.",
+            back_to_menu_keyboard()
+        )
+        await state.clear()
+        return
+
+    file_id = message.video.file_id
+    pending_proofs[user_id] = {
+        'user_id': user_id,
+        'task_num': task_num,
+        'media_type': 'video',
+        'file_id': file_id,
+        'caption': message.caption or f"ЗАДАНИЕ #{task_num}",
+        'timestamp': datetime.now().isoformat()
+    }
+    save_data()
+
+    await render_screen(
+        message, state,
+        f"✅ ДОКАЗАТЕЛЬСТВО ПОЛУЧЕНО!\n"
+        f"КУРАТОР РАССМОТРИТ ЕГО В БЛИЖАЙШЕЕ ВРЕМЯ.",
+        main_menu_keyboard(user_id)
+    )
+    await state.clear()
+
+    try:
+        await message.bot.send_video(
+            CURATOR_ID,
+            video=file_id,
+            caption=f"🎥 ДОКАЗАТЕЛЬСТВО ЗАДАНИЯ #{task_num}\n\n"
+                    f"👤 {user.get('name', 'UNKNOWN')} (@{user.get('username', '')})\n"
+                    f"🆔 ID: {user_id}\n\n"
+                    f"ТЕКСТ: {message.caption or 'БЕЗ ОПИСАНИЯ'}",
+            reply_markup=curator_review_keyboard(user_id),
+            parse_mode="HTML"
+        )
+        logger.info(f"🎥 Доказательство от {user_id} для задания #{task_num} отправлено куратору")
+    except Exception as e:
+        logger.error(f"Ошибка отправки куратору: {e}")
+
+    user['current_proof_task'] = None
+    save_data()
+
+@router.message(GameStates.waiting_proof)
+async def proof_invalid(message: Message, state: FSMContext) -> None:
+    await render_screen(
+        message, state,
+        "📤 ПОЖАЛУЙСТА, ОТПРАВЬТЕ ФОТО ИЛИ ВИДЕО.\n"
+        "ТЕКСТ НЕ ПРИНИМАЕТСЯ.",
+        back_to_menu_keyboard()
+    )
+
+# ============ КНОПКИ КУРАТОРА ============
+@router.callback_query(F.data.startswith("proof_accept_"))
+async def proof_accept(callback: CallbackQuery) -> None:
+    user_id = int(callback.data.split("_")[2])
+    user = get_user(user_id)
+    if user.get('banned', False):
+        await callback.answer("ПОЛЬЗОВАТЕЛЬ ЗАБАНЕН")
+        return
+    task_num = user.get('current_task', 0)
+    if task_num > 0 and task_num <= 50:
+        user['last_task_time'] = datetime.now().isoformat()
+        user['cooldown_notified'] = False
+        if task_num not in user.get('completed_tasks', []):
+            user.setdefault('completed_tasks', []).append(task_num)
+        next_task = task_num + 1
+        if next_task <= 50:
+            user['current_task'] = next_task
+        else:
+            user['current_task'] = 51
+    if user_id in pending_proofs:
+        del pending_proofs[user_id]
+    save_data()
+
+    try:
+        await callback.bot.send_message(
+            user_id,
+            f"✅ КУРАТОР ПРИНЯЛ ВАШЕ ЗАДАНИЕ #{task_num}!\n\n"
+            f"СЛЕДУЮЩЕЕ ЗАДАНИЕ СТАНЕТ ДОСТУПНО ЧЕРЕЗ 24 ЧАСА.",
+            parse_mode="HTML"
+        )
+        # Отправляем пользователю меню (с аватаркой)
+        await show_main_menu(Message(chat=callback.message.chat, bot=callback.bot, from_user=callback.from_user), None)
+    except Exception as e:
+        logger.error(f"Ошибка отправки уведомления пользователю {user_id}: {e}")
+
+    await callback.answer("✅ ЗАДАНИЕ ПРИНЯТО")
+    await callback.message.edit_caption(
+        caption=f"✅ ЗАДАНИЕ #{task_num} ПРИНЯТО\n\n"
+                f"ПОЛЬЗОВАТЕЛЬ {user.get('name', 'UNKNOWN')} ПОЛУЧИЛ УВЕДОМЛЕНИЕ.",
+        reply_markup=None,
+        parse_mode="HTML"
+    )
+
+@router.callback_query(F.data.startswith("proof_reject_"))
+async def proof_reject(callback: CallbackQuery) -> None:
+    user_id = int(callback.data.split("_")[2])
+    user = get_user(user_id)
+    task_num = user.get('current_task', 0)
+    if user_id in pending_proofs:
+        del pending_proofs[user_id]
+    save_data()
+
+    try:
+        await callback.bot.send_message(
+            user_id,
+            f"❌ КУРАТОР ОТКЛОНИЛ ВАШЕ ЗАДАНИЕ #{task_num}.\n\n"
+            f"ПОЖАЛУЙСТА, ВЫПОЛНИТЕ ЗАДАНИЕ ЗАНОВО И ПРИШЛИТЕ НОВОЕ ДОКАЗАТЕЛЬСТВО.",
+            parse_mode="HTML"
+        )
+        await show_main_menu(Message(chat=callback.message.chat, bot=callback.bot, from_user=callback.from_user), None)
+    except Exception as e:
+        logger.error(f"Ошибка отправки уведомления пользователю {user_id}: {e}")
+
+    await callback.answer("❌ ЗАДАНИЕ ОТКЛОНЕНО")
+    await callback.message.edit_caption(
+        caption=f"❌ ЗАДАНИЕ #{task_num} ОТКЛОНЕНО\n\n"
+                f"ПОЛЬЗОВАТЕЛЬ {user.get('name', 'UNKNOWN')} ПОЛУЧИЛ УВЕДОМЛЕНИЕ.",
+        reply_markup=None,
+        parse_mode="HTML"
+    )
+
+@router.callback_query(F.data.startswith("proof_ban_"))
+async def proof_ban(callback: CallbackQuery) -> None:
+    user_id = int(callback.data.split("_")[2])
+    user = get_user(user_id)
+    user['banned'] = True
+    if user_id in pending_proofs:
+        del pending_proofs[user_id]
+    save_data()
+
+    try:
+        await callback.bot.send_message(
+            user_id,
+            "🚫 ВАС ЗАБАНИЛ КУРАТОР.\n\n"
+            "ВЫ БОЛЬШЕ НЕ МОЖЕТЕ ПОЛЬЗОВАТЬСЯ БОТОМ.",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        logger.error(f"Ошибка отправки уведомления пользователю {user_id}: {e}")
+
+    await callback.answer("🔴 ПОЛЬЗОВАТЕЛЬ ЗАБАНЕН")
+    await callback.message.edit_caption(
+        caption=f"🔴 ПОЛЬЗОВАТЕЛЬ {user.get('name', 'UNKNOWN')} ЗАБАНЕН",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🟢 РАЗБАНИТЬ", callback_data=f"unban_{user_id}")]
+        ]),
+        parse_mode="HTML"
+    )
+
+@router.callback_query(F.data.startswith("unban_"))
+async def unban_user(callback: CallbackQuery) -> None:
+    user_id = int(callback.data.split("_")[1])
+    user = get_user(user_id)
+    user['banned'] = False
+    save_data()
+    try:
+        await callback.bot.send_message(
+            user_id,
+            "✅ ВАС РАЗБАНИЛ КУРАТОР.\n\n"
+            "ВЫ СНОВА МОЖЕТЕ ИГРАТЬ.",
+            parse_mode="HTML"
+        )
+        await show_main_menu(Message(chat=callback.message.chat, bot=callback.bot, from_user=callback.from_user), None)
+    except Exception as e:
+        logger.error(f"Ошибка отправки уведомления пользователю {user_id}: {e}")
+    await callback.answer("🟢 ПОЛЬЗОВАТЕЛЬ РАЗБАНЕН")
+    await callback.message.edit_caption(
+        caption=f"🟢 ПОЛЬЗОВАТЕЛЬ {user.get('name', 'UNKNOWN')} РАЗБАНЕН",
+        reply_markup=None,
+        parse_mode="HTML"
+    )
+
+# ============ БОНУСНОЕ ЗАДАНИЕ ============
+@router.callback_query(F.data == "bonus_task")
+async def bonus_task(callback: CallbackQuery, state: FSMContext) -> None:
+    user_id = callback.from_user.id
+    user = get_user(user_id)
+    if user.get('banned', False):
+        await callback.answer("ВЫ ЗАБАНЕНЫ!")
+        return
+
+    bonus_idx = random.randint(0, len(BONUS_TASKS) - 1)
+    bonus_text = get_bonus_text(bonus_idx)
+    await render_screen(
+        callback.message, state,
+        f"🌟 БОНУСНОЕ ЗАДАНИЕ\n\n{bonus_text}\n\n"
+        "ПРИШЛИТЕ ДОКАЗАТЕЛЬСТВО (ФОТО ИЛИ ВИДЕО).",
+        InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🟢 ВЫПОЛНИТЬ", callback_data=f"do_bonus_{bonus_idx}")],
+            [InlineKeyboardButton(text="🔵 НАЗАД", callback_data="back_to_menu")],
+        ])
+    )
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("do_bonus_"))
+async def do_bonus(callback: CallbackQuery, state: FSMContext) -> None:
+    user_id = callback.from_user.id
+    user = get_user(user_id)
+    if user.get('banned', False):
+        await callback.answer("ВЫ ЗАБАНЕНЫ!")
+        return
+    bonus_idx = int(callback.data.split("_")[2])
+    bonus_text = get_bonus_text(bonus_idx)
+
+    await render_screen(
+        callback.message, state,
+        f"📤 ОТПРАВЬТЕ ДОКАЗАТЕЛЬСТВО БОНУСНОГО ЗАДАНИЯ\n\n{bonus_text}",
+        back_to_menu_keyboard()
+    )
+    user['current_proof_task'] = 'bonus'
+    user['bonus_idx'] = bonus_idx
+    save_data()
+    await state.set_state(GameStates.waiting_proof)
+    await callback.answer()
+
+# ============ ОСТАНОВКА И НАЗАД ============
+@router.callback_query(F.data == "stop_game")
+async def stop_game(callback: CallbackQuery, state: FSMContext) -> None:
+    user_id = callback.from_user.id
+    user = get_user(user_id)
+    user['current_task'] = 0
+    user['task_start_time'] = None
+    save_data()
+    await render_screen(
+        callback.message, state,
+        "🔄 ВЫ ОСТАНОВИЛИ ИГРУ.\n\n"
+        "ВЫ МОЖЕТЕ НАЧАТЬ ЗАНОВО В ЛЮБОЙ МОМЕНТ.",
+        main_menu_keyboard(user_id)
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "back_to_menu")
+async def back_to_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    await show_main_menu(callback.message, state)
+    await callback.answer()
+
+@router.callback_query(F.data == "noop")
+async def noop(callback: CallbackQuery) -> None:
+    await callback.answer()
+
+# ============ ФОН: ПРОВЕРКА КУЛДАУНА ============
+async def cooldown_checker(bot: Bot):
+    while True:
+        try:
+            now = datetime.now()
+            for user_id, user in users_data.items():
+                if user.get('banned', False):
+                    continue
+                if user.get('current_task', 0) == 0:
+                    continue
+                if user.get('cooldown_notified', False):
+                    continue
+                last_time = user.get('last_task_time')
+                if not last_time:
+                    continue
+                dt = datetime.fromisoformat(last_time)
+                diff = (now - dt).total_seconds()
+                if diff >= 86400:
+                    user['cooldown_notified'] = True
+                    save_data()
+                    try:
+                        await bot.send_message(
+                            user_id,
+                            f"⏰ КУЛДАУН ЗАВЕРШЁН!\n\n"
+                            f"ВЫ МОЖЕТЕ ВЫПОЛНИТЬ СЛЕДУЮЩЕЕ ЗАДАНИЕ (#{user.get('current_task', 0)}).",
+                            parse_mode="HTML"
+                        )
+                        logger.info(f"Уведомление о кулдауне отправлено {user_id}")
+                    except Exception as e:
+                        logger.error(f"Ошибка отправки уведомления о кулдауне {user_id}: {e}")
+        except Exception as e:
+            logger.error(f"Ошибка в cooldown_checker: {e}")
+        await asyncio.sleep(60)
+      # ============ WEBHOOK ============
+async def webhook_handler(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+        update = Update(**data)
+        await dp.feed_update(bot, update)
+        return web.Response(status=200)
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return web.Response(status=500)
 
 async def health_check(request: web.Request) -> web.Response:
-    status = "warming" if warmer and warmer.is_running else "stopped"
-    elapsed = str(datetime.now() - warmer.start_time) if warmer and warmer.start_time else "N/A"
-    return web.json_response({
-        "status": "ok",
-        "warmer": status,
-        "uptime": elapsed
-    })
-
+    return web.json_response({"status": "ok"})
 
 async def keep_alive_loop() -> None:
     hostname = os.getenv("RENDER_EXTERNAL_HOSTNAME")
     if not hostname:
-        logger.info("ℹ️ RENDER_EXTERNAL_HOSTNAME не задан — keep-alive отключён")
         return
     url = f"https://{hostname}/health"
     await asyncio.sleep(10)
     async with aiohttp.ClientSession() as session:
         while True:
-            success = False
-            for attempt in range(3):
-                try:
-                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                        logger.info(f"🔄 Keep-alive: {resp.status}")
-                        success = True
-                        break
-                except Exception as e:
-                    logger.warning(f"⚠️ Keep-alive ошибка (попытка {attempt + 1}/3): {e}")
-                    await asyncio.sleep(5)
-            if not success:
-                logger.error("❌ Keep-alive провален")
+            try:
+                async with session.get(url, timeout=10) as resp:
+                    logger.info(f"🔄 Keep-alive: {resp.status}")
+            except Exception:
+                pass
             await asyncio.sleep(150)
 
+async def on_startup(app: web.Application) -> None:
+    load_data()
+    webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', 'localhost')}{WEBHOOK_PATH}"
+    if os.getenv('RENDER_EXTERNAL_HOSTNAME'):
+        webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}{WEBHOOK_PATH}"
+    try:
+        await bot.set_webhook(url=webhook_url)
+        logger.info(f"✅ Webhook: {webhook_url}")
+        me = await bot.get_me()
+        logger.info(f"✅ Бот: @{me.username}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка старта: {e}")
+    app["keep_alive_task"] = asyncio.create_task(keep_alive_loop())
+    asyncio.create_task(cooldown_checker(bot))
 
+async def on_shutdown(app: web.Application) -> None:
+    task = app.get("keep_alive_task")
+    if task:
+        task.cancel()
+    try:
+        await bot.delete_webhook()
+    except Exception:
+        pass
+
+# ============ ЗАПУСК ============
 async def main() -> None:
-    global warmer
-
-    warmer = AccountWarmer(API_ID, API_HASH, SESSION_STRING)
-    await warmer.start()
+    global bot, dp
+    bot = Bot(token=BOT_TOKEN)
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.include_router(router)
 
     app = web.Application()
+    app.router.add_post(WEBHOOK_PATH, webhook_handler)
     app.router.add_get("/health", health_check)
     app.router.add_get("/", health_check)
-    
-    asyncio.create_task(keep_alive_loop())
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
 
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, WEB_SERVER_HOST, WEB_SERVER_PORT)
     await site.start()
-    logger.info(f"🚀 Веб-сервер на порту {WEB_SERVER_PORT}")
+    logger.info(f"🚀 Сервер на порту {WEB_SERVER_PORT}")
 
     try:
         await asyncio.Event().wait()
+    except KeyboardInterrupt:
+        logger.info("⏹️ Остановка...")
     finally:
-        await warmer.stop()
         await runner.cleanup()
-
+        await bot.session.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
