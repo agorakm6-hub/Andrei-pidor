@@ -126,7 +126,8 @@ BONUS_TASKS = [
 class GameStates(StatesGroup):
     waiting_proof = State()
 
-router = Router()def load_data():
+router = Router()
+def load_data():
     global users_data, pending_proofs
     if os.path.exists(DATA_FILE):
         try:
