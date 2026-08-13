@@ -3,7 +3,7 @@ import logging
 import os
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, FSInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiohttp import web
@@ -18,6 +18,9 @@ CHANNEL_ID = -1004420294467
 WEBHOOK_PATH = "/webhook"
 WEB_SERVER_HOST = "0.0.0.0"
 WEB_SERVER_PORT = int(os.getenv("PORT", 8080))
+
+# Картинка должна лежать в той же папке, что и этот файл
+PHOTO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "set.jpg")
 
 # Первый в списке — первый в кнопках
 SELLER_USERNAMES = ["godcop", "Negot_iopp"]
@@ -142,12 +145,13 @@ async def show_categories(message_or_callback):
     lines = "\n".join(f"<b>{cat['title']}: {cat['range']}</b>" for cat in CATEGORIES.values())
     text = f"⭐ <b>ПАКЕТЫ ЗВЁЗД</b> ⭐\n\n{lines}"
     if isinstance(message_or_callback, types.Message):
-        await message_or_callback.answer(
-            text, parse_mode="HTML", reply_markup=get_categories_keyboard()
+        await message_or_callback.answer_photo(
+            photo=FSInputFile(PHOTO_PATH),
+            caption=text, parse_mode="HTML", reply_markup=get_categories_keyboard()
         )
     else:
-        await message_or_callback.message.edit_text(
-            text, parse_mode="HTML", reply_markup=get_categories_keyboard()
+        await message_or_callback.message.edit_caption(
+            caption=text, parse_mode="HTML", reply_markup=get_categories_keyboard()
         )
 
 async def show_category_packages(callback: CallbackQuery, cat_id: str):
@@ -157,8 +161,8 @@ async def show_category_packages(callback: CallbackQuery, cat_id: str):
         f"⭐ <b>{cat['title'].upper()}</b> ⭐\n\n"
         f"<b>Выбери точный пакет ниже</b>"
     )
-    await callback.message.edit_text(
-        text, parse_mode="HTML", reply_markup=get_category_packages_keyboard(cat_id)
+    await callback.message.edit_caption(
+        caption=text, parse_mode="HTML", reply_markup=get_category_packages_keyboard(cat_id)
     )
 
 async def show_subscribe_prompt(message_or_callback):
@@ -168,12 +172,13 @@ async def show_subscribe_prompt(message_or_callback):
         "<b>Подпишись и нажми кнопку ниже для проверки.</b>"
     )
     if isinstance(message_or_callback, types.Message):
-        await message_or_callback.answer(
-            subscribe_text, parse_mode="HTML", reply_markup=get_subscribe_keyboard()
+        await message_or_callback.answer_photo(
+            photo=FSInputFile(PHOTO_PATH),
+            caption=subscribe_text, parse_mode="HTML", reply_markup=get_subscribe_keyboard()
         )
     else:
-        await message_or_callback.message.edit_text(
-            subscribe_text, parse_mode="HTML", reply_markup=get_subscribe_keyboard()
+        await message_or_callback.message.edit_caption(
+            caption=subscribe_text, parse_mode="HTML", reply_markup=get_subscribe_keyboard()
         )
 
 # ================= /start =================
@@ -199,8 +204,8 @@ async def process_check_sub(callback: CallbackQuery):
             "<b>Подпишись на канал и нажми кнопку снова.</b>"
         )
         await callback.answer("Подписка не найдена", show_alert=True)
-        await callback.message.edit_text(
-            error_text, parse_mode="HTML", reply_markup=get_subscribe_keyboard()
+        await callback.message.edit_caption(
+            caption=error_text, parse_mode="HTML", reply_markup=get_subscribe_keyboard()
         )
 
 # ================= ВЫБОР КАТЕГОРИИ (ОБЪЁМА) =================
@@ -246,8 +251,8 @@ async def process_package(callback: CallbackQuery):
             f"<b>Твоя цена: {our:.2f} BYN</b>\n\n"
             f"<b>Напиши одному из продавцов для оплаты:</b>"
         )
-        await callback.message.edit_text(
-            order_text, parse_mode="HTML", reply_markup=get_order_keyboard(cat_id)
+        await callback.message.edit_caption(
+            caption=order_text, parse_mode="HTML", reply_markup=get_order_keyboard(cat_id)
         )
 
 # ================= WEBHOOK HANDLER ДЛЯ RENDER =================
@@ -335,4 +340,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-    
+                
