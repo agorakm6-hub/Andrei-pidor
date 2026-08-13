@@ -19,7 +19,8 @@ WEBHOOK_PATH = "/webhook"
 WEB_SERVER_HOST = "0.0.0.0"
 WEB_SERVER_PORT = int(os.getenv("PORT", 8080))
 
-SELLER_USERNAMES = ["Negot_iopp", "godcop"]
+# Первый в списке — первый в кнопках
+SELLER_USERNAMES = ["godcop", "Negot_iopp"]
 # ============================================
 
 PRICE_LIST = [
@@ -37,6 +38,22 @@ PRICE_LIST = [
     (5000, 349.99, 352.99),
     (10000, 699.99, 702.99),
 ]
+
+CATEGORIES = {
+    "small":  {"title": "Маленький", "range": "50-500 ⭐",     "min": 0,    "max": 500},
+    "medium": {"title": "Средний",   "range": "750-1500 ⭐",   "min": 501,  "max": 1500},
+    "large":  {"title": "Большой",   "range": "2500-10000 ⭐", "min": 1501, "max": 10**9},
+}
+
+def get_category_id(stars: int) -> str:
+    for cat_id, cat in CATEGORIES.items():
+        if cat["min"] <= stars <= cat["max"]:
+            return cat_id
+    return "medium"
+
+def packages_in_category(cat_id: str):
+    cat = CATEGORIES[cat_id]
+    return [p for p in PRICE_LIST if cat["min"] <= p[0] <= cat["max"]]
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -64,21 +81,37 @@ def get_subscribe_keyboard() -> InlineKeyboardMarkup:
     )
     return builder.as_markup()
 
-def get_menu_keyboard() -> InlineKeyboardMarkup:
-    """Пакеты звёзд — синие (primary), по 2 в ряд"""
+def get_categories_keyboard() -> InlineKeyboardMarkup:
+    """Верхний уровень: выбор объёма пакета"""
     builder = InlineKeyboardBuilder()
-    for stars, official, our in PRICE_LIST:
+    for cat_id, cat in CATEGORIES.items():
+        builder.row(
+            InlineKeyboardButton(
+                text=cat['title'],
+                callback_data=f"cat_{cat_id}",
+                style="primary"
+            )
+        )
+    return builder.as_markup()
+
+def get_category_packages_keyboard(cat_id: str) -> InlineKeyboardMarkup:
+    """Второй уровень: конкретные пакеты внутри категории, 2 в ряд"""
+    builder = InlineKeyboardBuilder()
+    for stars, official, our in packages_in_category(cat_id):
         btn_text = f"{stars} ⭐ — {our:.2f} BYN"
         builder.button(
             text=btn_text,
-            callback_data=f"package_{stars}",
+            callback_data=f"package_{stars}_{cat_id}",
             style="primary"
         )
     builder.adjust(2)
+    builder.row(
+        InlineKeyboardButton(text="🔙 НАЗАД К ОБЪЁМАМ", callback_data="back_to_categories")
+    )
     return builder.as_markup()
 
-def get_order_keyboard() -> InlineKeyboardMarkup:
-    """Кнопки оплаты (продавцы) — зелёные (success), назад — стандартная"""
+def get_order_keyboard(cat_id: str) -> InlineKeyboardMarkup:
+    """Кнопки оплаты (продавцы) — зелёные (success), назад — в свою категорию"""
     builder = InlineKeyboardBuilder()
     for username in SELLER_USERNAMES:
         builder.row(
@@ -89,7 +122,7 @@ def get_order_keyboard() -> InlineKeyboardMarkup:
             )
         )
     builder.row(
-        InlineKeyboardButton(text="🔙 НАЗАД К ПАКЕТАМ", callback_data="back_to_menu")
+        InlineKeyboardButton(text="🔙 НАЗАД К ПАКЕТАМ", callback_data=f"cat_{cat_id}")
     )
     return builder.as_markup()
 
@@ -103,27 +136,36 @@ async def check_subscription(user_id: int) -> bool:
         logger.error(f"Ошибка проверки подписки: {e}")
         return False
 
-# ================= ПОКАЗ МЕНЮ =================
-async def show_menu(message_or_callback):
-    """Показывает главное меню с пакетами"""
-    menu_text = (
-        "⭐ <b>ВЫБЕРИ ПАКЕТ ЗВЁЗД</b> ⭐\n\n"
-        "<i>Нажми на нужный пакет ниже</i>"
-    )
+# ================= ПОКАЗ ЭКРАНОВ =================
+async def show_categories(message_or_callback):
+    """Показывает верхний уровень: выбор объёма пакета"""
+    lines = "\n".join(f"<b>{cat['title']}: {cat['range']}</b>" for cat in CATEGORIES.values())
+    text = f"⭐ <b>ПАКЕТЫ ЗВЁЗД</b> ⭐\n\n{lines}"
     if isinstance(message_or_callback, types.Message):
         await message_or_callback.answer(
-            menu_text, parse_mode="HTML", reply_markup=get_menu_keyboard()
+            text, parse_mode="HTML", reply_markup=get_categories_keyboard()
         )
-    else:  # CallbackQuery
+    else:
         await message_or_callback.message.edit_text(
-            menu_text, parse_mode="HTML", reply_markup=get_menu_keyboard()
+            text, parse_mode="HTML", reply_markup=get_categories_keyboard()
         )
+
+async def show_category_packages(callback: CallbackQuery, cat_id: str):
+    """Показывает пакеты внутри выбранной категории"""
+    cat = CATEGORIES[cat_id]
+    text = (
+        f"⭐ <b>{cat['title'].upper()}</b> ⭐\n\n"
+        f"<b>Выбери точный пакет ниже</b>"
+    )
+    await callback.message.edit_text(
+        text, parse_mode="HTML", reply_markup=get_category_packages_keyboard(cat_id)
+    )
 
 async def show_subscribe_prompt(message_or_callback):
     """Показывает запрос на подписку"""
     subscribe_text = (
         "🔒 <b>ДЛЯ ИСПОЛЬЗОВАНИЯ БОТА НЕОБХОДИМА ПОДПИСКА НА КАНАЛ</b>\n\n"
-        "<i>Подпишись и нажми кнопку ниже для проверки.</i>"
+        "<b>Подпишись и нажми кнопку ниже для проверки.</b>"
     )
     if isinstance(message_or_callback, types.Message):
         await message_or_callback.answer(
@@ -139,7 +181,7 @@ async def show_subscribe_prompt(message_or_callback):
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
     if await check_subscription(user_id):
-        await show_menu(message)
+        await show_categories(message)
     else:
         await show_subscribe_prompt(message)
 
@@ -150,18 +192,37 @@ async def process_check_sub(callback: CallbackQuery):
     user_id = callback.from_user.id
 
     if await check_subscription(user_id):
-        await show_menu(callback)
+        await show_categories(callback)
     else:
         error_text = (
             "❌ <b>ТЫ ЕЩЁ НЕ ПОДПИСАЛСЯ!</b>\n\n"
-            "<i>Подпишись на канал и нажми кнопку снова.</i>"
+            "<b>Подпишись на канал и нажми кнопку снова.</b>"
         )
         await callback.answer("Подписка не найдена", show_alert=True)
         await callback.message.edit_text(
             error_text, parse_mode="HTML", reply_markup=get_subscribe_keyboard()
         )
 
-# ================= ВЫБОР ПАКЕТА =================
+# ================= ВЫБОР КАТЕГОРИИ (ОБЪЁМА) =================
+@dp.callback_query(F.data.startswith("cat_"))
+async def process_category(callback: CallbackQuery):
+    await callback.answer()
+
+    if not await check_subscription(callback.from_user.id):
+        await show_subscribe_prompt(callback)
+        return
+
+    cat_id = callback.data.split("_", 1)[1]
+    if cat_id in CATEGORIES:
+        await show_category_packages(callback, cat_id)
+
+# ================= НАЗАД К КАТЕГОРИЯМ =================
+@dp.callback_query(F.data == "back_to_categories")
+async def process_back_to_categories(callback: CallbackQuery):
+    await callback.answer()
+    await show_categories(callback)
+
+# ================= ВЫБОР КОНКРЕТНОГО ПАКЕТА =================
 @dp.callback_query(F.data.startswith("package_"))
 async def process_package(callback: CallbackQuery):
     await callback.answer()
@@ -171,27 +232,23 @@ async def process_package(callback: CallbackQuery):
         await show_subscribe_prompt(callback)
         return
 
-    stars = int(callback.data.split("_")[1])
+    # package_<stars>_<cat_id>
+    _, stars_str, cat_id = callback.data.split("_", 2)
+    stars = int(stars_str)
     package_info = next((p for p in PRICE_LIST if p[0] == stars), None)
 
     if package_info:
         official, our = package_info[1], package_info[2]
         order_text = (
             f"✅ <b>ЗАКАЗ ПРИНЯТ</b>\n\n"
-            f"Пакет: <b>{stars} ⭐</b>\n"
-            f"Официальная цена: {official:.2f} BYN\n"
-            f"Твоя цена: <b>{our:.2f} BYN</b>\n\n"
-            f"Напиши одному из продавцов для оплаты:"
+            f"<b>Пакет: {stars} ⭐</b>\n"
+            f"<b>Официальная цена: {official:.2f} BYN</b>\n"
+            f"<b>Твоя цена: {our:.2f} BYN</b>\n\n"
+            f"<b>Напиши одному из продавцов для оплаты:</b>"
         )
         await callback.message.edit_text(
-            order_text, parse_mode="HTML", reply_markup=get_order_keyboard()
+            order_text, parse_mode="HTML", reply_markup=get_order_keyboard(cat_id)
         )
-
-# ================= НАЗАД К МЕНЮ =================
-@dp.callback_query(F.data == "back_to_menu")
-async def process_back_to_menu(callback: CallbackQuery):
-    await callback.answer()
-    await show_menu(callback)
 
 # ================= WEBHOOK HANDLER ДЛЯ RENDER =================
 async def webhook_handler(request: web.Request) -> web.Response:
@@ -208,19 +265,28 @@ async def health_check(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
 async def keep_alive_loop() -> None:
+    """
+    Подстраховка от сна на Render. НЕ панацея: если инстанс уже уснул,
+    эта корутина тоже не работает (процесс остановлен), поэтому дополнительно
+    настрой внешний пинг (UptimeRobot / cron-job.org) на /health каждые 5 минут —
+    только внешний пинг умеет БУДИТЬ уже уснувший бесплатный инстанс.
+    """
     hostname = os.getenv("RENDER_EXTERNAL_HOSTNAME")
     if not hostname:
+        logger.warning("RENDER_EXTERNAL_HOSTNAME не задан — внутренний keep-alive выключен")
         return
+
     url = f"https://{hostname}/health"
     await asyncio.sleep(10)
+
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                async with session.get(url, timeout=10) as resp:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     logger.info(f"Keep-alive: {resp.status}")
-            except Exception:
-                pass
-            await asyncio.sleep(150)
+            except Exception as e:
+                logger.warning(f"Keep-alive ping не удался: {e}")
+            await asyncio.sleep(300)  # каждые 5 минут — с запасом до 15-минутного тайм-аута Render
 
 async def on_startup(app: web.Application) -> None:
     webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME', 'localhost')}{WEBHOOK_PATH}"
@@ -269,4 +335,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-        
+    
