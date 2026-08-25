@@ -27,6 +27,7 @@ from telethon.tl.functions.messages import ReportRequest
 from telethon.tl.functions.account import ReportPeerRequest
 from telethon.tl.types import InputReportReasonPersonalDetails
 from telethon.tl.functions.contacts import SearchRequest
+from telethon.tl.functions.contacts import BlockRequest
 
 # ============ НАСТРОЙКИ ИЗ ENV ============
 
@@ -42,7 +43,20 @@ WEBHOOK_PATH = "/webhook"
 WEB_SERVER_HOST = "0.0.0.0"
 WEB_SERVER_PORT = int(os.getenv("PORT", "10000"))
 
-REPORT_TEXT = "Данный сервис нарушает правила Telegram и законодательство о персональных данных, занимаясь незаконным распространением конфиденциальной информации третьих лиц (паспорта, ИНН, СНИЛС, адреса и номера телефонов)"
+# ============ 10 ШАБЛОНОВ ДЛЯ ЖАЛОБ ============
+
+TEMPLATES = [
+    "Здравствуйте! Прошу принять меры и заблокировать бота @{username}. Данный сервис нарушает правила Telegram и законодательство о персональных данных, занимаясь незаконным распространением конфиденциальной информации третьих лиц (паспорта, ИНН, СНИЛС, адреса и номера телефонов).",
+    "Данный бот @{username} нарушает правила Telegram, распространяя личные данные пользователей без их согласия. Прошу заблокировать данный аккаунт.",
+    "Бот @{username} занимается незаконным сбором и распространением персональных данных. Это нарушает политику конфиденциальности Telegram. Прошу принять меры.",
+    "Прошу заблокировать бота @{username}. Данный сервис предоставляет доступ к личным данным третьих лиц, что является нарушением законодательства и правил Telegram.",
+    "Бот @{username} нарушает правила Telegram, распространяя конфиденциальную информацию (паспорта, номера телефонов, адреса). Прошу заблокировать.",
+    "Обращаю ваше внимание на бота @{username}, который занимается незаконной продажей личных данных. Прошу заблокировать данный аккаунт.",
+    "Бот @{username} нарушает политику Telegram в отношении персональных данных. Прошу принять меры и заблокировать этот аккаунт.",
+    "Данный бот @{username} распространяет личные данные третьих лиц без их согласия. Это нарушает правила Telegram и законодательство. Прошу заблокировать.",
+    "Бот @{username} предоставляет доступ к конфиденциальной информации пользователей. Прошу заблокировать данный аккаунт за нарушение правил.",
+    "Прошу принять меры в отношении бота @{username}, который нарушает правила Telegram, распространяя личные данные (паспорта, ИНН, адреса)."
+]
 
 # ============ ЛОГИРОВАНИЕ ============
 
@@ -54,7 +68,8 @@ logger = logging.getLogger(__name__)
 REPORT_SESSIONS: Dict[str, TelegramClient] = {}
 active_tasks: Dict[str, asyncio.Task] = {}
 stop_flags: Dict[str, bool] = {}
-processed_bots: Set[str] = set()  # Для непрерывного режима
+processed_bots: Set[str] = set()
+blocked_bots: Set[str] = set()
 
 # ============ СОСТОЯНИЯ ============
 
@@ -66,15 +81,6 @@ class ReportStates(StatesGroup):
 router = Router()
 
 # ============ РАБОТА С СЕССИЯМИ ============
-
-def load_sessions_from_disk() -> dict:
-    if not os.path.exists("sessions.json"):
-        return {}
-    try:
-        with open("sessions.json", "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
 
 async def connect_session(name: str, entry) -> TelegramClient:
     try:
@@ -106,20 +112,12 @@ async def load_all_sessions():
         if client:
             REPORT_SESSIONS[name] = client
     
-    raw = load_sessions_from_disk()
-    for name, entry in raw.items():
-        if name in REPORT_SESSIONS:
-            continue
-        client = await connect_session(name, entry)
-        if client:
-            REPORT_SESSIONS[name] = client
-    
     logger.info(f"✅ Загружено сессий: {len(REPORT_SESSIONS)}")
 
 async def get_sessions_list() -> list:
     return [(name, client) for name, client in REPORT_SESSIONS.items()]
 
-# ============ ОТПРАВКА ЖАЛОБ (МАКСИМУМ 3+3) ============
+# ============ ОТПРАВКА ЖАЛОБ ============
 
 async def send_profile_report(client, entity, text: str) -> bool:
     try:
@@ -152,15 +150,37 @@ async def send_message_report(client, entity, message_id: int, text: str) -> boo
         logger.warning(f"Ошибка жалобы на сообщение: {e}")
         return False
 
-async def get_last_message(client, entity):
+async def block_bot(client, entity) -> bool:
     try:
-        msgs = await asyncio.wait_for(client.get_messages(entity, limit=1), timeout=15)
+        await asyncio.wait_for(
+            client(BlockRequest(id=entity)),
+            timeout=10
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"Ошибка блокировки бота: {e}")
+        return False
+
+async def get_bot_response(client, entity):
+    try:
+        await client.send_message(entity, "/start")
+        await asyncio.sleep(1)
+        
+        for _ in range(10):
+            msgs = await client.get_messages(entity, limit=2)
+            if msgs and len(msgs) >= 2:
+                last_msg = msgs[0]
+                if last_msg.from_id and last_msg.from_id.user_id == entity.id:
+                    return last_msg
+            await asyncio.sleep(1)
+        
+        msgs = await client.get_messages(entity, limit=1)
         return msgs[0] if msgs else None
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Ошибка получения сообщения от бота: {e}")
         return None
 
 async def process_bot(client, username: str) -> dict:
-    """Отправляет ровно 3 жалобы на профиль + 3 жалобы на сообщение"""
     result = {
         "username": username,
         "profile_success": 0,
@@ -169,7 +189,8 @@ async def process_bot(client, username: str) -> dict:
         "success": 0,
         "error": None,
         "message_id": None,
-        "blocked": False
+        "blocked": False,
+        "template_used": None
     }
     
     try:
@@ -178,39 +199,33 @@ async def process_bot(client, username: str) -> dict:
         result["error"] = f"Бот не найден: {e}"
         return result
     
-    # Отправляем /start чтобы получить сообщение
-    try:
-        await client.send_message(entity, "/start")
-        await asyncio.sleep(2)
-    except Exception:
-        pass
-    
-    last_msg = await get_last_message(client, entity)
+    last_msg = await get_bot_response(client, entity)
     if last_msg:
         result["message_id"] = last_msg.id
     
-    # 3 жалобы на профиль
+    template = random.choice(TEMPLATES)
+    result["template_used"] = template[:80] + "..."
+    report_text = template.format(username=username.lstrip('@'))
+    
     for _ in range(3):
-        success = await send_profile_report(client, entity, REPORT_TEXT)
+        success = await send_profile_report(client, entity, report_text)
         if success:
             result["profile_success"] += 1
             result["success"] += 1
         result["total"] += 1
         await asyncio.sleep(random.uniform(1.0, 2.5))
     
-    # 3 жалобы на сообщение
     if last_msg and last_msg.id:
         for _ in range(3):
-            success = await send_message_report(client, entity, last_msg.id, REPORT_TEXT)
+            success = await send_message_report(client, entity, last_msg.id, report_text)
             if success:
                 result["message_success"] += 1
                 result["success"] += 1
             result["total"] += 1
             await asyncio.sleep(random.uniform(1.0, 2.5))
     else:
-        # Если нет сообщения — кидаем 3 доп жалобы на профиль
         for _ in range(3):
-            success = await send_profile_report(client, entity, REPORT_TEXT)
+            success = await send_profile_report(client, entity, report_text)
             if success:
                 result["profile_success"] += 1
                 result["success"] += 1
@@ -218,8 +233,12 @@ async def process_bot(client, username: str) -> dict:
             await asyncio.sleep(random.uniform(1.0, 2.5))
         result["message_success"] = 0
     
-    # Отмечаем бота как обработанного
-    result["blocked"] = True
+    if result["success"] > 0:
+        blocked = await block_bot(client, entity)
+        if blocked:
+            result["blocked"] = True
+            blocked_bots.add(username)
+    
     return result
 
 async def search_bots(client, query: str) -> List[str]:
@@ -240,7 +259,7 @@ async def search_bots(client, query: str) -> List[str]:
         except Exception:
             pass
     return results
-    # ============ РЕЖИМ 1: РЕПОРТ НА СПИСОК БОТОВ ============
+    # ============ РЕЖИМ 1: РЕПОРТ НА СПИСОК ============
 
 async def run_mass_report(bot: Bot, chat_id: int, bot_list: List[str], task_id: str, continuous: bool = False):
     status_msg = await bot.send_message(chat_id, f"🔄 Начинаю жалобы на {len(bot_list)} ботов...")
@@ -260,7 +279,6 @@ async def run_mass_report(bot: Bot, chat_id: int, bot_list: List[str], task_id: 
                 await status_msg.edit_text(f"🛑 Остановлено! Обработано: {current-1}/{total}")
                 break
             
-            # Пропускаем уже обработанных в непрерывном режиме
             if continuous and username in processed_bots:
                 continue
             
@@ -275,26 +293,24 @@ async def run_mass_report(bot: Bot, chat_id: int, bot_list: List[str], task_id: 
             results.append(result)
             await asyncio.sleep(random.uniform(0.5, 1.5))
         
-        # Отчёт
         report_text = f"📊 ИТОГ\n\nОбработано: {len(results)}/{total}\n\n"
         for r in results:
             if r.get("error"):
                 report_text += f"❌ {r['username']}: {r['error']}\n"
             else:
+                template_preview = r.get("template_used", "не указан")
                 report_text += (
                     f"✅ {r['username']}: "
                     f"профиль={r.get('profile_success', 0)}, "
-                    f"сообщение={r.get('message_success', 0)}\n"
+                    f"сообщение={r.get('message_success', 0)}"
+                    f"{' 🚫 заблокирован' if r.get('blocked') else ''}\n"
+                    f"   📝 шаблон: {template_preview}\n"
                 )
         
         if len(report_text) > 4000:
             report_text = report_text[:4000] + "\n... (обрезано)"
         
         await status_msg.edit_text(report_text)
-        
-        if continuous:
-            # В непрерывном режиме ищем следующих ботов
-            pass
         
     except Exception as e:
         await status_msg.edit_text(f"❌ Ошибка: {e}")
@@ -304,7 +320,7 @@ async def run_mass_report(bot: Bot, chat_id: int, bot_list: List[str], task_id: 
         if task_id in stop_flags:
             del stop_flags[task_id]
 
-# ============ РЕЖИМ 2: НЕПРЕРЫВНЫЙ РЕПОРТ (1 час) ============
+# ============ РЕЖИМ 2: НЕПРЕРЫВНЫЙ РЕПОРТ ============
 
 async def run_continuous_report(bot: Bot, chat_id: int, bot_name: str, task_id: str):
     status_msg = await bot.send_message(chat_id, f"🔄 Запускаю непрерывный репорт на ботов по запросу '{bot_name}'...")
@@ -320,7 +336,6 @@ async def run_continuous_report(bot: Bot, chat_id: int, bot_name: str, task_id: 
         total_reports = 0
         total_bots = 0
         cycle = 0
-        processed_in_cycle = 0
         
         while datetime.now() < end_time and not stop_flags.get(task_id, False):
             cycle += 1
@@ -329,7 +344,6 @@ async def run_continuous_report(bot: Bot, chat_id: int, bot_name: str, task_id: 
             await status_msg.edit_text(f"🔍 Цикл {cycle}: Ищу ботов по запросу '{bot_name}'...")
             
             found_bots = await search_bots(client, bot_name)
-            # Фильтруем уже обработанных
             new_bots = [b for b in found_bots if b not in processed_bots]
             
             if not new_bots:
@@ -337,25 +351,22 @@ async def run_continuous_report(bot: Bot, chat_id: int, bot_name: str, task_id: 
                 await asyncio.sleep(30)
                 continue
             
-            await status_msg.edit_text(f"🔄 Цикл {cycle}: Найдено {len(new_bots)} новых ботов. Начинаю жалобы...")
+            await status_msg.edit_text(f"🔄 Цикл {cycle}: Найдено {len(new_bots)} новых ботов.")
             
-            processed_in_cycle = 0
-            for username in new_bots[:10]:  # максимум 10 ботов за цикл
+            for username in new_bots[:10]:
                 if stop_flags.get(task_id, False):
                     break
                 
                 processed_bots.add(username)
                 total_bots += 1
                 
-                await status_msg.edit_text(f"🔄 [{processed_in_cycle+1}/{len(new_bots)}] {username}...")
+                await status_msg.edit_text(f"🔄 [{total_bots}] {username}...")
                 
                 result = await process_bot(client, username)
                 total_reports += result.get("success", 0)
-                processed_in_cycle += 1
                 
                 await asyncio.sleep(random.uniform(1.0, 2.5))
             
-            # Отчёт по циклу
             elapsed = int((datetime.now() - start_time).total_seconds())
             remaining = max(0, 3600 - elapsed)
             minutes = remaining // 60
@@ -363,27 +374,24 @@ async def run_continuous_report(bot: Bot, chat_id: int, bot_name: str, task_id: 
             
             await status_msg.edit_text(
                 f"✅ Цикл {cycle} готов.\n"
-                f"📊 Обработано ботов: {processed_in_cycle}\n"
-                f"📊 Отправлено жалоб: {total_reports}\n"
-                f"⏳ Осталось: {minutes}м {seconds}с\n"
-                f"🎯 Всего ботов: {total_bots}"
+                f"📊 Ботов: {total_bots}\n"
+                f"📊 Жалоб: {total_reports}\n"
+                f"⏳ Осталось: {minutes}м {seconds}с"
             )
             
             await asyncio.sleep(5)
         
-        # Финальный отчёт
         elapsed = int((datetime.now() - start_time).total_seconds())
         minutes = elapsed // 60
         seconds = elapsed % 60
         
         final_text = (
             f"🛑 НЕПРЕРЫВНЫЙ РЕПОРТ ЗАВЕРШЁН\n\n"
-            f"⏳ Время работы: {minutes}м {seconds}с\n"
-            f"🎯 Обработано ботов: {total_bots}\n"
-            f"📊 Отправлено жалоб: {total_reports}\n"
-            f"🔄 Выполнено циклов: {cycle}"
+            f"⏳ Время: {minutes}м {seconds}с\n"
+            f"🎯 Ботов: {total_bots}\n"
+            f"📊 Жалоб: {total_reports}\n"
+            f"🔄 Циклов: {cycle}"
         )
-        
         await status_msg.edit_text(final_text)
         
     except Exception as e:
@@ -393,24 +401,7 @@ async def run_continuous_report(bot: Bot, chat_id: int, bot_name: str, task_id: 
             del active_tasks[task_id]
         if task_id in stop_flags:
             del stop_flags[task_id]
-
-# ============ РЕЖИМ 3: РЕПОРТ НА СПИСОК (из текста) ============
-
-async def run_text_report(bot: Bot, chat_id: int, text: str, task_id: str):
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    bot_list = []
-    for ln in lines:
-        if ln.startswith("@"):
-            bot_list.append(ln)
-        else:
-            bot_list.append(f"@{ln}")
-    
-    if not bot_list:
-        await bot.send_message(chat_id, "❌ Список пуст!")
-        return
-    
-    await run_mass_report(bot, chat_id, bot_list, task_id, continuous=False)
-    # ============ КЛАВИАТУРЫ ============
+            # ============ КЛАВИАТУРЫ ============
 
 def kb_main_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -479,7 +470,6 @@ async def process_search_bot(message: Message, state: FSMContext):
             await status.edit_text(f"❌ Боты по запросу '{query}' не найдены.")
             return
         
-        # Список текстом для копирования
         text = f"✅ Найдено {len(results)} ботов:\n\n"
         for username in results:
             text += f"{username}\n"
@@ -502,7 +492,7 @@ async def mass_report(callback: CallbackQuery, state: FSMContext):
         "@bot1\n"
         "@bot2\n"
         "@bot3\n\n"
-        "На каждого бота будет отправлено 3 жалобы на профиль + 3 жалобы на сообщение.",
+        "На каждого бота: 3 жалобы на профиль + 3 жалобы на сообщение.",
         reply_markup=kb_back_to_menu()
     )
 
@@ -547,9 +537,9 @@ async def continuous_report(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         "🔄 НЕПРЕРЫВНЫЙ РЕПОРТ\n\n"
         "Введите имя для поиска ботов.\n"
-        "Бот будет искать новых ботов каждые 30 секунд и отправлять жалобы.\n"
+        "Бот будет искать новых ботов каждые 30 сек и отправлять жалобы.\n"
         "Работает ровно 1 час, затем останавливается.\n\n"
-        "⚠️ Каждый бот получает 3 жалобы на профиль + 3 жалобы на сообщение.",
+        "⚠️ Каждый бот: 3 профиль + 3 сообщение.",
         reply_markup=kb_back_to_menu()
     )
 
@@ -598,6 +588,7 @@ async def sessions_status(callback: CallbackQuery):
     if not sessions:
         text += "  ❌ Нет активных сессий"
     text += f"\n\n📊 Обработано ботов: {len(processed_bots)}"
+    text += f"\n🚫 Заблокировано ботов: {len(blocked_bots)}"
     await callback.answer()
     await callback.message.edit_text(text, reply_markup=kb_back_to_menu())
 
