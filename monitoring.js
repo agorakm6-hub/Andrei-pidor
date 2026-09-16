@@ -18,7 +18,6 @@ const BOT_TOKEN = env("BOT_TOKEN");
 const API_ID = Number(env("API_ID"));
 const API_HASH = env("API_HASH");
 const SESSION_STRING = env("SESSION_STRING");
-const OWNER_ID = Number(env("OWNER_ID", false) || "6811074441"); // бот отвечает только этому id
 const POLL_INTERVAL_MS = Number(env("POLL_INTERVAL_MS", false) || "3000"); // раз в сколько проверять
 const MAX_DURATION_MS = Number(env("MAX_DURATION_MS", false) || String(60 * 60 * 1000)); // максимум 1 час
 
@@ -194,14 +193,11 @@ function formatDuration(ms) {
 const bot = new Bot(BOT_TOKEN);
 bot.use(session({ initial: () => ({ waitingUsername: false }) }));
 
-// Доступ только владельцу
-bot.use(async (ctx, next) => {
-  if (ctx.from?.id !== OWNER_ID) return; // остальным бот молчит
-  await next();
-});
+// Открыт для всех (стресс-тест с разных аккаунтов)
 
-// Одновременно мониторим не больше одного аккаунта (по задумке — личный эксперимент одного пользователя)
-let activeMonitor = null;
+// Для стресс-теста бот открыт для всех — каждый чат мониторится
+// независимо, ключ — chatId. Один чат = один активный мониторинг за раз.
+const activeMonitors = new Map();
 
 const WELCOME_TEXT =
   "Добро пожаловать.\n\n" +
@@ -217,11 +213,12 @@ bot.command("start", async (ctx) => {
   await sendMessage(ctx.chat.id, WELCOME_TEXT);
 });
 
-function stopActiveMonitor() {
-  if (activeMonitor) {
-    clearInterval(activeMonitor.timer);
-    clearTimeout(activeMonitor.timeout);
-    activeMonitor = null;
+function stopMonitor(chatId) {
+  const m = activeMonitors.get(chatId);
+  if (m) {
+    clearInterval(m.timer);
+    clearTimeout(m.timeout);
+    activeMonitors.delete(chatId);
   }
 }
 
@@ -229,8 +226,10 @@ bot.on("message:text", async (ctx) => {
   if (!ctx.session.waitingUsername) return;
   if (ctx.message.text.startsWith("/")) return;
 
-  if (activeMonitor) {
-    await sendMessage(ctx.chat.id, "Уже идёт мониторинг другого аккаунта — сначала остановите его кнопкой ниже.", monitoringKeyboard());
+  const chatId = ctx.chat.id;
+
+  if (activeMonitors.has(chatId)) {
+    await sendMessage(chatId, "Уже идёт мониторинг другого аккаунта в этом чате — сначала остановите его кнопкой ниже.", monitoringKeyboard());
     return;
   }
 
@@ -243,7 +242,7 @@ bot.on("message:text", async (ctx) => {
   const info = await getAccountInfo(target.type, target.value);
   if (!info) {
     await sendMessage(
-      ctx.chat.id,
+      chatId,
       target.type === "id"
         ? `Не получилось найти аккаунт с ID ${target.display}. Для мониторинга по ID нужно, чтобы наша сессия уже "видела" этот аккаунт (общий чат, переписка, контакты). Попробуй юзернейм вместо ID, если он есть.`
         : `Не получилось найти аккаунт ${target.display}. Проверь юзернейм и попробуй снова.`
@@ -252,17 +251,16 @@ bot.on("message:text", async (ctx) => {
   }
 
   const sent = await sendMessage(
-    ctx.chat.id,
+    chatId,
     `Мониторинг запущен на:\n\n` +
       `Имя: ${info.fullName}\n` +
       `Юзернейм: ${info.username ?? "отсутствует"}\n` +
       `ID: ${info.id}\n\n` +
-      `Проверяем каждые ${Math.round(POLL_INTERVAL_MS / 1000)} сек, максимум час.\n` +
+      `Проверяю каждые ${Math.round(POLL_INTERVAL_MS / 1000)} сек, максимум час.\n` +
       `При окончании мониторинга вы получите уведомление.`,
     monitoringKeyboard()
   );
 
-  const chatId = ctx.chat.id;
   const messageId = sent.message_id;
   const startedAt = Date.now();
 
@@ -270,7 +268,7 @@ bot.on("message:text", async (ctx) => {
     const status = await checkAccountStatus(target.type, target.value);
     if (status === "banned_or_deleted") {
       const elapsed = Date.now() - startedAt;
-      stopActiveMonitor();
+      stopMonitor(chatId);
       await editMessageText(
         chatId,
         messageId,
@@ -281,21 +279,23 @@ bot.on("message:text", async (ctx) => {
   }, POLL_INTERVAL_MS);
 
   const timeout = setTimeout(async () => {
-    stopActiveMonitor();
+    stopMonitor(chatId);
     await editMessageText(chatId, messageId, `Мониторинг завершён\n\nИзменений нет. Аккаунт ${target.display} цел.`);
   }, MAX_DURATION_MS);
 
-  activeMonitor = { display: target.display, chatId, messageId, startedAt, timer, timeout };
+  activeMonitors.set(chatId, { display: target.display, messageId, startedAt, timer, timeout });
 });
 
 bot.callbackQuery("stop_monitor", async (ctx) => {
-  if (!activeMonitor) {
+  const chatId = ctx.chat.id;
+  const m = activeMonitors.get(chatId);
+  if (!m) {
     await ctx.answerCallbackQuery({ text: "Мониторинг уже не идёт" });
     return;
   }
-  const { display, chatId, messageId, startedAt } = activeMonitor;
+  const { display, messageId, startedAt } = m;
   const elapsed = Date.now() - startedAt;
-  stopActiveMonitor();
+  stopMonitor(chatId);
   await editMessageText(chatId, messageId, `Мониторинг остановлен вручную\n\n${display}, длительность: ${formatDuration(elapsed)}.`);
   await ctx.answerCallbackQuery();
 });
@@ -389,4 +389,4 @@ main().catch(async (err) => {
   await userbotStop();
   process.exit(1);
 });
-      
+    
