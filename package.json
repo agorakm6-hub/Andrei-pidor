@@ -1,7 +1,7 @@
 {
   "name": "ban-monitor-bot",
   "type": "module",
-  "scripts": { "start": "node monitor_bot.js" },
+  "scripts": { "start": "node monitoring.js" },
   "dependencies": {
     "grammy": "^1.30.0",
     "telegram": "^2.26.0",
